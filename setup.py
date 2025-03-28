@@ -177,7 +177,7 @@ setup(
     name="pydftracer",
     use_scm_version={"version_scheme": myversion_func},
     packages=(
-        find_namespace_packages(include=["dftracer", "dfanalyzer"])
+        find_namespace_packages(include=["dftracer", "dftracer.dbg", "dfanalyzer"])
     ),
     ext_modules=[
         CMakeExtension("dftracer.pydftracer"),

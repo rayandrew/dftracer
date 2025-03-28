@@ -37,7 +37,7 @@ dlio_corona_generate:
     - source .gitlab/scripts/variables.sh
     - source .gitlab/scripts/pre.sh
     - rm .gitlab/scripts/run_dlio_workload_test_ci.yaml
-    - python .gitlab/scripts/generate_dlio_job.py --output .gitlab/scripts/run_dlio_workload_test_ci.yaml
+    - python .gitlab/scripts/generate_dlio_job.py --output .gitlab/scripts/run_dlio_workload_test_ci.yaml --log-level INFO
     - if [ ! -f .gitlab/scripts/run_dlio_workload_test_ci.yaml ]; then echo 'File not generated!'; exit 1; fi
     - cat .gitlab/scripts/run_dlio_workload_test_ci.yaml
   artifacts:

@@ -56,7 +56,7 @@ def execute_dlio_benchmark_query(workload, args, key, datatype=str):
         The output of the query converted to the specified datatype.
     """
     query_command = f"dlio_benchmark_query workload={workload} {args} ++workload.workflow.query={key}"
-    logging.info(f"Executing command: {query_command}")
+    logging.debug(f"Executing command: {query_command}")
     process = os.popen(query_command + " 2>/dev/null")
     output = process.read()
     exit_code = process.close()
@@ -66,15 +66,17 @@ def execute_dlio_benchmark_query(workload, args, key, datatype=str):
             f"Failed to execute dlio_benchmark_query with command: {query_command}"
         )
 
-    logging.info(f"Command executed successfully. Output: {output.strip()}")
+    logging.debug(f"Command executed successfully. Output: {output.strip()}")
     try:
         result = datatype(output)
-        logging.info(f"Converted output to {datatype.__name__}: {result}")
+        logging.debug(f"Converted output to {datatype.__name__}: {result}")
         return result
     except ValueError as e:
         logging.error(f"Failed to convert output to {datatype.__name__}: {e}")
         raise ValueError(f"Failed to convert output to {datatype}: {e}")
 
+def get_queue_time_for_nodes_minutes(nodes):
+    return int(os.getenv("LARGE_QUEUE_WALLTIME", 1)) if nodes > int(os.getenv("MAX_NODES_SMALL_QUEUE", 1)) else int(os.getenv("SMALL_QUEUE_WALLTIME", 1))
 
 def create_flux_execution_command(nodes=None, tasks_per_node=None):
     """Create a Flux execution command based on environment variables or input arguments."""
@@ -88,7 +90,7 @@ def create_flux_execution_command(nodes=None, tasks_per_node=None):
 
     nodes = nodes or int(os.getenv("MIN_NODES", 1))
     queue = os.getenv("LARGE_QUEUE", "lqueue") if nodes > int(os.getenv("MAX_NODES_SMALL_QUEUE", 1)) else os.getenv("SMALL_QUEUE", "squeue")
-    WALLTIME = os.getenv("LARGE_QUEUE_WALLTIME", 1) if nodes > int(os.getenv("MAX_NODES_SMALL_QUEUE", 1)) else os.getenv("SMALL_QUEUE_WALLTIME", 1)
+    WALLTIME = get_queue_time_for_nodes_minutes(nodes)
 
     if not all([nodes, queue, WALLTIME]):
         logging.error(
@@ -99,7 +101,7 @@ def create_flux_execution_command(nodes=None, tasks_per_node=None):
         )
 
     command = f"flux run -N {nodes} --tasks-per-node={tasks_per_node} -q {queue} -t {WALLTIME} --exclusive"
-    logging.info(f"Generated Flux execution command: {command}")
+    logging.debug(f"Generated Flux execution command: {command}")
     return command
 
 
@@ -114,7 +116,9 @@ def generate_gitlab_ci_yaml(config_files):
             "train",
             "compress_output",
             "move",
+            "create_summary",
             "compact",
+            "cleanup_compact",
             "compress_final",
             "cleanup",
         ],
@@ -161,7 +165,7 @@ def generate_gitlab_ci_yaml(config_files):
     log_dir = f"{log_store_dir}/v{dftracer_version}/{system_name}"
     logging.info(f"Generated log directory path: {log_dir}")
 
-    compress_stages = []
+    move_stages = []
     # Generate a unique 8-digit UID for the run
     unique_run_id = datetime.now().strftime("%Y%m%d%H%M%S")
     logging.info(f"Generated unique run ID: {unique_run_id}")
@@ -190,6 +194,14 @@ def generate_gitlab_ci_yaml(config_files):
         record_len = execute_dlio_benchmark_query(
             workload, workload_args, "dataset.record_length_bytes", float
         )
+        computation_time = execute_dlio_benchmark_query(
+            workload, workload_args, "train.computation_time", float
+        )
+        total_training_steps = execute_dlio_benchmark_query(
+            workload, workload_args, "train.total_training_steps", int
+        )
+        if total_training_steps == -1:
+            total_training_steps = None
         d = {
             "tp_size": tp_size,
             "pp_size": pp_size,
@@ -197,6 +209,8 @@ def generate_gitlab_ci_yaml(config_files):
             "num_files": num_files,
             "batch_size": batch_size,
             "record_len": record_len,
+            "computation_time": computation_time,
+            "total_training_steps": total_training_steps,
         }
         return index, workload, d
 
@@ -206,7 +220,7 @@ def generate_gitlab_ci_yaml(config_files):
             executor.submit(process_workload, idx, workload): idx
             for idx, workload in enumerate(config_files, start=0)
         }
-        for future in concurrent.futures.as_completed(futures):
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc=f"Extracting workload parameters using {os.cpu_count()} workers"):
             idx, workload, d = future.result()
             config_values[idx] = d
     
@@ -238,64 +252,93 @@ def generate_gitlab_ci_yaml(config_files):
         num_files = config_values[idx - 1]["num_files"]
         batch_size = config_values[idx - 1]["batch_size"]
         record_len = config_values[idx - 1]["record_len"]
+        computation_time = config_values[idx - 1]["computation_time"]
+        total_training_steps = config_values[idx - 1]["total_training_steps"]
+        
+        
+        logging.info(
+            f"Extracted workload '{workload}' parameters: "
+            f"tp_size={tp_size}, pp_size={pp_size}, samples_per_file={samples_per_file}, "
+            f"num_files={num_files}, batch_size={batch_size}, record_len={record_len}, "
+            f"computation_time={computation_time}, total_training_steps={total_training_steps}"
+        )
 
-        nodes = int(os.getenv("MIN_NODES", 1))
+        min_nodes = int(os.getenv("MIN_NODES", 1))
         gpus = int(os.getenv("GPUS", 1))
         cores = int(os.getenv("CORES", 1))
-
-        min_steps = 10
-        cal_max_nodes = max(
-            1, int(samples_per_file * num_files / batch_size / gpus / min_steps)
-        )
         
-        current_steps = max(1, int(samples_per_file * num_files / batch_size / gpus / nodes))
-        
-        
-        total_dataset_size = 1024 * 1024 * 1024 * 1024
-        if not isinstance(num_files, int) or num_files < 1:
-            logging.error(f"Invalid value for num_files: {num_files}")
-            raise ValueError("num_files must be a positive integer.")
-        if num_files == 1:
-            total_dataset_size //= 2  # Use integer division for consistency
-        max_files = max(1, int(math.floor(total_dataset_size / record_len / samples_per_file)))
-        if max_files < num_files:
-            num_files = max_files
-        
-        current_size = samples_per_file * max_files * record_len
-        if current_size > total_dataset_size:
-            max_samples_per_file = max(1, int(math.floor(total_dataset_size / max_files / record_len)))
-            if max_samples_per_file < samples_per_file:
-                samples_per_file = max_samples_per_file
-        
-        override_data_size_args = f"++workload.dataset.num_samples_per_file={samples_per_file} ++workload.dataset.num_files_train={num_files}"
-
-        ranks = nodes * gpus
+        min_ranks = min_nodes * gpus
         tp_pp_product = tp_size * pp_size
-        if ranks % tp_pp_product != 0:
-            ranks = (ranks // tp_pp_product + 1) * tp_pp_product
+        if min_ranks % tp_pp_product != 0:
+            min_ranks += tp_pp_product - (min_ranks % tp_pp_product)
 
         max_nodes = int(os.getenv("MAX_NODES", 1))
-        nodes = max(1, ranks // gpus)
-        if nodes > max_nodes:
+        min_nodes = max(1, min_ranks // gpus)
+        if min_nodes > max_nodes:
+            logging.warning(f"Cannot run workload:{workload} as minimum number of nodes needed are {min_nodes} but we have maximum {max_nodes} with tp_pp_product:{tp_pp_product} and min_ranks:{min_ranks}")
             continue
-
+        
+        logging.info(
+            f"Workload '{workload}': Calculated min_nodes={min_nodes} and max_nodes={max_nodes} "
+            f"based on model parallelism (tp_size={tp_size}, pp_size={pp_size})."
+        )
+        min_steps = 10
+        logging.info(
+            f"Calculating maximum nodes supported for workload '{workload}' "
+            f"with parameters: samples_per_file={samples_per_file}, num_files={num_files}, "
+            f"batch_size={batch_size}, gpus={gpus}, min_steps={min_steps}"
+        )
+        cal_max_nodes = min(max(
+            1, int(samples_per_file * num_files / batch_size / gpus / min_steps)
+        ), max_nodes)
+        logging.info(
+            f"Maximum of {cal_max_nodes} nodes for running at least {min_steps} steps"
+        )
         if max_nodes > cal_max_nodes:
             max_nodes = cal_max_nodes
+        if max_nodes < min_nodes:
+            min_nodes = max_nodes
+        
+        min_current_steps = int (samples_per_file * num_files / batch_size / gpus / min_nodes)
+        if total_training_steps:
+            min_current_steps = total_training_steps
+        min_time_for_one_epoch_sec = computation_time * min_current_steps * 1.20 # we approx this to make sure we have enough time
+        min_nodes_needed_for_one_epoch = min_nodes
+        min_wall_time_sec = get_queue_time_for_nodes_minutes(min_nodes) * 60
+        max_iterations = 5  # Safeguard to prevent infinite loop
+        iteration_count = 0
+        while min_time_for_one_epoch_sec > min_wall_time_sec:
+            min_nodes *= 2
+            if min_nodes > max_nodes or iteration_count >= max_iterations:
+                logging.warning("Exiting loop due to reaching max_nodes or max_iterations.")
+                break
+            min_current_steps = int(samples_per_file * num_files / batch_size / gpus / min_nodes)
+            min_wall_time_sec = get_queue_time_for_nodes_minutes(min_nodes) * 60
+            min_time_for_one_epoch_sec = computation_time * min_current_steps * 1.20
+            logging.info(f"iteration {iteration_count} workload:{workload}: min_nodes:{min_nodes} min_current_steps:{min_current_steps} min_wall_time_sec:{min_wall_time_sec} min_time_for_one_epoch_sec:{min_time_for_one_epoch_sec} computation_time:{computation_time}")
+            iteration_count += 1
 
-        if max_nodes < nodes:
-            nodes = max_nodes
-
-        # Ensure max_nodes is a power of 2
-        max_nodes = (
-            2 ** (max_nodes - 1).bit_length()
-            if max_nodes & (max_nodes - 1) != 0
-            else max_nodes
+        if min_nodes > max_nodes:
+            logging.info(f"Cannot run workload:{workload} as minimum number of nodes needed are {min_nodes} as we have {min_current_steps} steps that would approx take {min_time_for_one_epoch_sec} seconds and we have limit of {min_wall_time_sec} seconds but we have maximum {max_nodes}")
+            continue
+        
+        logging.info(
+            f"Minimum of {min_nodes} nodes are needed to run {min_current_steps} steps in {min_wall_time_sec} seconds job time"
         )
         
-        data_generation_nodes = nodes
-        if nodes * gpus > num_files:
+        
+        
+
+
+        
+
+        override_data_size_args = ""
+
+        
+        data_generation_nodes = min_nodes
+        if min_nodes * gpus > num_files:
             io_per_rank = 16 * 1024 * 1024 * 1024
-            data_generation_nodes = max(nodes, int(math.floor(num_files * samples_per_file * record_len / io_per_rank / cores)))
+            data_generation_nodes = max(min_nodes, int(math.floor(num_files * samples_per_file * record_len / io_per_rank / cores)))
         
         # Ensure max_nodes is a power of 2
         data_generation_nodes = (
@@ -306,6 +349,7 @@ def generate_gitlab_ci_yaml(config_files):
         data_generation_nodes = min(max_nodes, data_generation_nodes)
         
         flux_cores_one_node_args = create_flux_execution_command(1, cores)
+        flux_cores_one_node_one_ppn_args = create_flux_execution_command(1, 1)
         flux_cores_args = create_flux_execution_command(data_generation_nodes, cores)
         output = f"{custom_ci_output_dir}/{workload}/{data_generation_nodes}/{unique_run_id}"
         dlio_data_dir = f"{data_path}/{workload_name}/"
@@ -322,15 +366,18 @@ def generate_gitlab_ci_yaml(config_files):
                     "which python; which dlio_benchmark;",
                     "export DLIO_LOG_LEVEL=info",
                     "module load mpifileutils",
-                    f"if [ -d {dlio_data_dir} ] && [ ! -f {dlio_data_dir}/success ]; then echo 'Directory {dlio_data_dir} exist but is not complete.'; {flux_cores_one_node_args} drm {dlio_data_dir};  fi",
-                    f"if [ -f {dlio_data_dir}/success ]; then echo 'Directory {dlio_data_dir} already exists. Skipping data generation.'; else {flux_cores_args} dlio_benchmark workload={workload} {workload_args} ++workload.output.folder={output}/generate ++workload.workflow.generate_data=True ++workload.workflow.train=False ++workload.workflow.checkpoint=False; fi",
+                    f"if [ -d {dlio_data_dir} ] && [ ! -f {dlio_data_dir}/success ]; then echo 'Directory {dlio_data_dir} exist but is not complete.'; {flux_cores_one_node_args} --job-name ${workload}_drm drm {dlio_data_dir};  fi",
+                    f"if [ -f {dlio_data_dir}/success ]; then echo 'Directory {dlio_data_dir} already exists. Skipping data generation.'; else {flux_cores_args} --job-name ${workload}_gen dlio_benchmark workload={workload} {workload_args} ++workload.output.folder={output}/generate ++workload.workflow.generate_data=True ++workload.workflow.train=False ++workload.workflow.checkpoint=False; fi",
                     f"if [ -d {dlio_data_dir} ] && grep -i 'error' {output}/generate/dlio.log; then echo 'Error found in dlio.log'; exit 1; fi",
                     f"touch {dlio_data_dir}/success"
                 ],
                 "needs": ["create_directory_common"],
             }
             create_stages.add(generate_job_name)
-
+        logging.info(
+            f"Running workload:{workload} with {min_nodes} - {max_nodes} nodes"
+        )
+        nodes = min_nodes
         while nodes <= max_nodes:
             output = f"{custom_ci_output_dir}/{workload}/{nodes}/{unique_run_id}"
             dlio_checkpoint_dir = f"{data_path}/{workload}-{idx}-{nodes}/"
@@ -346,6 +393,7 @@ def generate_gitlab_ci_yaml(config_files):
                     "compress_output",
                     "move",
                     "compact",
+                    "cleanup_compact",
                     "compress_final",
                     "cleanup",
                 ],
@@ -362,7 +410,7 @@ def generate_gitlab_ci_yaml(config_files):
                             "source .gitlab/scripts/variables.sh",
                             "source .gitlab/scripts/pre.sh",
                             "which python; which dlio_benchmark;",
-                            f"{flux_gpu_args} dlio_benchmark workload={workload} {workload_args} ++workload.output.folder={output}/train hydra.run.dir={output}/train ++workload.workflow.generate_data=False ++workload.workflow.train=True",
+                            f"{flux_gpu_args} --job-name ${workload}_train dlio_benchmark workload={workload} {workload_args} ++workload.output.folder={output}/train hydra.run.dir={output}/train ++workload.workflow.generate_data=False ++workload.workflow.train=True",
                             f"if grep -i 'error' {output}/train/dlio.log; then echo 'Error found in dlio.log'; exit 1; fi",
                         ],
                         "needs": [generate_job_name],
@@ -380,16 +428,12 @@ def generate_gitlab_ci_yaml(config_files):
                             "source .gitlab/scripts/variables.sh",
                             "source .gitlab/scripts/pre.sh",
                             "which python; which dftracer_pgzip;",
-                            f"{flux_cores_one_node_args} dftracer_pgzip -d {output}/train",
+                            f"{flux_cores_one_node_one_ppn_args} --job-name ${workload}_compress dftracer_pgzip -d {output}/train",
                             f"if find {output}/train -type f -name '*.pfw' | grep -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi",
                             f"if ! find {output}/train -type f -name '*.pfw.gz' | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi",
                         ],
                         "needs": [f"{base_job_name}_train"],
                     }
-                    compress_stages.append(
-                        {"job": f"{base_job_name}_compress_output", "optional": True}
-                    )
-
                 elif stage == "move":
                     ci_config[f"{base_job_name}_move"] = {
                         "stage": "move",
@@ -404,6 +448,9 @@ def generate_gitlab_ci_yaml(config_files):
                         ],
                         "needs": [f"create_directory_common", f"{base_job_name}_compress_output"],
                     }
+                    move_stages.append(
+                        {"job": f"{base_job_name}_move", "optional": True}
+                    )
 
                 elif stage == "compact":
                     ci_config[f"{base_job_name}_compact"] = {
@@ -415,12 +462,22 @@ def generate_gitlab_ci_yaml(config_files):
                             # "source .gitlab/scripts/build.sh",
                             "which python; which dftracer_split;",
                             f"cd {log_dir}/{workload}/nodes-{nodes}/{unique_run_id}",
-                            f"{flux_cores_one_node_args} dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n {workload}",
+                            f"{flux_cores_one_node_one_ppn_args} --job-name ${workload}_dfsplit dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n {workload}",
                             f"if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted .pfw.gz files found!'; exit 1; fi",
                         ],
                         "needs": [f"{base_job_name}_move"],
                     }
-
+                elif stage == "cleanup_compact":
+                    ci_config[f"{base_job_name}_cleanup_compact"] = {
+                        "stage": "cleanup_compact",
+                        "extends": f".{system_name}",
+                        "script": [
+                           "module load mpifileutils",
+                            f"{flux_cores_one_node_args} --job-name ${workload}_clean drm {log_dir}/{workload}/nodes-{nodes}/{unique_run_id}/COMPACT",
+                        ],
+                        "needs": [f"{base_job_name}_compact"],
+                        "when": "on_failure",
+                    }
                 elif stage == "compress_final":
                     ci_config[f"{base_job_name}_compress_final"] = {
                         "stage": "compress_final",
@@ -430,9 +487,10 @@ def generate_gitlab_ci_yaml(config_files):
                             "source .gitlab/scripts/pre.sh",
                             f"cd {log_dir}/{workload}/nodes-{nodes}/{unique_run_id}",
                             f"tar -czf RAW.tar.gz RAW",
-                            f"tar -czf COMPACT.tar.gz COMPACT",
+                            f"if [ -d COMPACT ]; then tar -czf COMPACT.tar.gz COMPACT; fi",
                         ],
-                        "needs": [f"{base_job_name}_compact"],
+                        "needs": [f"{base_job_name}_move"],
+                        "when": "on_success",
                     }
 
                 elif stage == "cleanup":
@@ -447,8 +505,22 @@ def generate_gitlab_ci_yaml(config_files):
                             "job": f"{base_job_name}_compress_final",
                             "optional": True,
                         },
+                        "when": "always",
                     }
             nodes *= 2
+    ci_config[f"create_summary"] = {
+        "stage": "create_summary",
+        "extends": f".{system_name}",
+        "script": [
+            "ls",
+            "source .gitlab/scripts/variables.sh",
+            "source .gitlab/scripts/pre.sh",
+            "which python; which dftracer_event_count;",
+            "./.gitlab/scripts/generate_summary.sh",
+        ],
+        "needs": move_stages[:99],
+        "when": "always",
+    }
     return ci_config
 
 
@@ -513,7 +585,7 @@ def main():
 
     end_time = time.time()
     total_time = end_time - start_time
-    logging.error(f"Total execution time: {total_time:.2f} seconds")
+    logging.info(f"Total execution time: {total_time:.2f} seconds")
 
 
 if __name__ == "__main__":

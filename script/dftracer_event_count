@@ -93,8 +93,8 @@ function get_lines_count {
     if [ $sqlite_exists -eq 1 ]; then
       lines_counts[$file_index]=$(
       {
-        sqlite3 $file_name "select count(line) as a from LineOffsets where length > 8;"
-        progress_date_echo "Finished counting $file_index of $total" >&2
+        sqlite3 "$file_name" "select count(line) as a from LineOffsets where length > 8;"
+        progress_date_echo "Finished counting $file_index" >&2
       } &)
     else
       lines_counts[$file_index]=$(
