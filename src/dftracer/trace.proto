@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package dftracer.protos;
+
+message Trace {
+  repeated TracePacket packets = 1;
+}
+
+message TracePacket {
+  int64 timestamp = 1;
+  TrackEvent track_event = 11;
+}
+
+message TrackEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    TYPE_SLICE_BEGIN = 1;
+    TYPE_SLICE_END = 2;
+  }
+  Type type = 1;
+  string name = 2;
+  int32 trusted_pid = 3;
+  int32 trusted_tid = 4;
+
+  message DebugAnnotation {
+    string name = 1;
+    oneof value {
+      int64 int_value = 2;
+      double double_value = 3;
+      string string_value = 4;
+    }
+  }
+  repeated DebugAnnotation debug_annotations = 5;
+}

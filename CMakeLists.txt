@@ -225,6 +225,98 @@ endif ()
 
 # Optional Dependencies
 # =============================================================================
+
+include(FetchContent)
+set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/.cmake_cache")
+
+# Download only Perfetto source files
+FetchContent_Declare(
+    Perfetto
+    GIT_REPOSITORY https://github.com/google/perfetto.git
+    GIT_TAG main  # Optionally, use a specific commit or tag for reproducibility
+    SOURCE_DIR ${FETCHCONTENT_BASE_DIR}/perfetto
+)
+
+FetchContent_MakeAvailable(Perfetto)
+
+# Protobuf generation paths
+set(PROTOBUF_SRC_DIR ${FETCHCONTENT_BASE_DIR}/perfetto/protos)
+
+# Define protobuf files to be compiled
+# set(PROTO_FILES
+#     ${PROTOBUF_SRC_DIR}/perfetto/trace/trace.proto
+#     ${PROTOBUF_SRC_DIR}/perfetto/trace/track_event/track_event.proto
+# )
+
+# Find Protobuf package
+find_package(Protobuf REQUIRED)
+include_directories(${PROTOBUF_INCLUDE_DIRS})
+include_directories(${PROTOBUF_BINARY_DIR})
+
+set(GENERATED_PROTO_DIR ${CMAKE_BINARY_DIR}/generated)
+file(MAKE_DIRECTORY ${GENERATED_PROTO_DIR})
+file(GLOB_RECURSE ALL_PROTO_FILES "${PROTOBUF_SRC_DIR}/*.proto")
+
+set(PROTO_DIRS "")
+foreach(PROTO_FILE ${ALL_PROTO_FILES})
+    get_filename_component(PROTO_DIR ${PROTO_FILE} DIRECTORY)
+    list(FIND PROTO_DIRS ${PROTO_DIR} DIR_INDEX)
+    if(DIR_INDEX EQUAL -1)
+        list(APPEND PROTO_DIRS ${PROTO_DIR})
+    endif()
+endforeach()
+
+set(PROTO_SRCS "")
+set(PROTO_HDRS "")
+foreach(PROTO_DIR ${PROTO_DIRS})
+    file(GLOB PROTO_FILES_IN_DIR "${PROTO_DIR}/*.proto")
+    
+     if (PROTO_FILES_IN_DIR)
+        protobuf_generate_cpp(
+            PROTO_SRCS PROTO_HDRS
+            PROTOC_OUT_DIR ${GENERATED_PROTO_DIR}
+            ${PROTO_FILES_IN_DIR}
+        )
+        list(APPEND PROTO_SRCS ${PROTO_SRCS_DIR})
+        list(APPEND PROTO_HDRS ${PROTO_HDRS_DIR})
+    endif()
+
+
+endforeach()
+
+
+# Generate Protobuf files
+include_directories(${Protobuf_INCLUDE_DIRS})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+# protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES} PROTOC_OUT_DIR ${GENERATED_PROTO_DIR})
+
+
+# # Create the protobuf binary directory
+# file(MAKE_DIRECTORY ${PROTOBUF_BINARY_DIR})
+# 
+# # Define protobuf files to be compiled
+# set(PROTO_FILES
+#     ${PROTOBUF_SRC_DIR}/perfetto/trace/trace.proto
+#     ${PROTOBUF_SRC_DIR}/perfetto/trace/track_event/track_event.proto
+# )
+# 
+# find_package(Protobuf REQUIRED)
+# include_directories(${Protobuf_INCLUDE_DIRS})
+# include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+# 
+# set(PROTO_FILES
+#     ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/trace.proto
+# )
+# set(GENERATED_PROTO_DIR ${CMAKE_BINARY_DIR}/generated)
+# file(MAKE_DIRECTORY ${GENERATED_PROTO_DIR})
+# include_directories(${GENERATED_PROTO_DIR})
+# protobuf_generate_cpp(
+#     PROTO_SRCS PROTO_HDRS
+#     ${PROTO_FILES}
+#     PROTOC_OUT_DIR ${GENERATED_PROTO_DIR}
+# )
+
+
 if (DFTRACER_BUILD_PYTHON_BINDINGS)
     find_package(pybind11 REQUIRED)
     #add_subdirectory(dependency/py11bind)
@@ -267,7 +359,8 @@ set(DFTRACER_CORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/brahma/posix.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/configuration_manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/md5.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/df_logger.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/utils.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/utils.cpp
+        ${PROTO_SRCS})
 set(DFTRACER_CORE_PUBLIC_INCLUDE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dftracer/dftracer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dftracer/core/constants.h
@@ -285,13 +378,13 @@ set(DFTRACER_CORE_PRIVATE_INCLUDE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/configuration_manager.h)
 add_library(${PROJECT_NAME} SHARED)
 target_compile_definitions(${PROJECT_NAME} PUBLIC DFTRACER_LOGGER_LEVEL_ERROR)
-target_link_libraries(${PROJECT_NAME} ${DEPENDENCY_LIB})
+target_link_libraries(${PROJECT_NAME} ${DEPENDENCY_LIB} ${Protobuf_LIBRARIES})
 add_library(${PROJECT_NAME}_dbg SHARED)
-target_link_libraries(${PROJECT_NAME}_dbg ${DEPENDENCY_LIB})
+target_link_libraries(${PROJECT_NAME}_dbg ${DEPENDENCY_LIB} ${Protobuf_LIBRARIES})
 add_library(${PROJECT_NAME}_preload SHARED)
-target_link_libraries(${PROJECT_NAME}_preload ${DEPENDENCY_LIB} ${PROJECT_NAME})
+target_link_libraries(${PROJECT_NAME}_preload ${DEPENDENCY_LIB} ${PROJECT_NAME} ${Protobuf_LIBRARIES})
 add_library(${PROJECT_NAME}_preload_dbg SHARED)
-target_link_libraries(${PROJECT_NAME}_preload_dbg ${DEPENDENCY_LIB} ${PROJECT_NAME}_dbg)
+target_link_libraries(${PROJECT_NAME}_preload_dbg ${DEPENDENCY_LIB} ${PROJECT_NAME}_dbg ${Protobuf_LIBRARIES})
 
 set(DFTRACER_DEBUG_TARGETS ${PROJECT_NAME}_dbg ${PROJECT_NAME}_preload_dbg)
 

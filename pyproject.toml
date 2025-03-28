@@ -14,7 +14,7 @@ build-backend = "setuptools.build_meta"
 name = "pydftracer"
 description = "I/O profiler for deep learning python apps. Specifically for dlio_benchmark."
 readme = "README.md"
-requires-python = '>=3.7'
+requires-python = '>=3.8'
 
 authors = [
   { name = "Hariharan Devarajan (Hari)", email = "hariharandev1@llnl.gov" }
