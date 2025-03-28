@@ -48,11 +48,23 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Cleaning output folder"
-mkdir -p $CUSTOM_CI_OUTPUR_DIR
-rm -rf $CUSTOM_CI_OUTPUR_DIR/*
 
-env | grep ci
+echo "Defining scheduler function..."
+scheduler() {
+    hostname=$(hostname)
+    case $hostname in
+        *"corona"*)
+            echo "Setting SCHEDULER_CMD for hostname containing 'corona'..."
+            SCHEDULER_CMD=(flux submit -N $1 --tasks-per-node=$2 -q $QUEUE -t $WALLTIME --exclusive)
+            ;;
+        *)
+            echo "Unknown hostname: $hostname"
+            exit 1
+            ;;
+    esac
+}
+
+pip install -r .gitlab/scripts/requirements.txt
 
 # Disable debugging
 set +x

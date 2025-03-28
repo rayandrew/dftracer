@@ -1,0 +1,26 @@
+.lc:
+  id_tokens:
+    SITE_ID_TOKEN:
+      aud: https://lc.llnl.gov/gitlab
+
+.corona:
+  extends: .lc
+  tags:
+    - shell
+    - corona
+  variables:
+    PYTHON_MODULE: python/3.9.12
+    MPI_MODULE: openmpi/4.1.2 # OpenMPI is a popular open-source MPI implementation
+    GCC_MODULE: gcc/10.3.1
+    DATA_PATH: "/p/lustre3/iopp/gitlab-runner-data/"
+    LOG_STORE_DIR: "/p/lustre3/iopp/dftracer-traces-lfs" # 'iopp' refers to a specific directory structure
+    CORES: 48
+    GPUS: 8
+    LARGE_QUEUE_WALLTIME: 240 # Walltime specifies the maximum runtime in minutes
+    SMALL_QUEUE_WALLTIME: 60
+    LARGE_QUEUE: pbatch # 'pbatch' is a queue name for batch jobs
+    SMALL_QUEUE: pdebug # 'pdebug' is a queue name for debugging jobs
+    MIN_NODES: 1
+    MAX_NODES: 8
+    MAX_NODES_SMALL_QUEUE: 8
+    SYSTEM_NAME: corona

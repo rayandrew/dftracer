@@ -96,5 +96,9 @@
         "filesystem": "cpp",
         "*.in": "cpp"
     },
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "cSpell.words": [
+        "DFTRACER",
+        "dlio"
+    ]
 }

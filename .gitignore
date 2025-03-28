@@ -55,6 +55,7 @@ build
 /cmake-build-debug-1/
 /temp/dftracer/
 /Testing/Temporary/
+dftracer/_version.py
 
 # Additional aux files
 logs/*.log
@@ -103,3 +104,6 @@ devenv.local.nix
 
 # pre-commit
 .pre-commit-config.yaml
+
+# gitlab
+.gitlab/scripts/hydra_log

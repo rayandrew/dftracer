@@ -1,0 +1,3700 @@
+variables: {}
+stages:
+- generate_data
+- train
+- compress_output
+- create_directory
+- move
+- compact
+- compress_final
+- cleanup
+include:
+- project: lc-templates/id_tokens
+  file: id_tokens.yml
+- local: .gitlab/scripts/common.yml
+bert_generate_data:
+  stage: generate_data
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - if [ -d /tmp/bert-8/ ]; then echo 'Directory /tmp/bert-8/ already exists. Skipping
+    data generation.'; else flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive
+    dlio_benchmark workload=bert_v100 ++workload.dataset.data_folder=/tmp/bert-8//data
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=313532 ++dataset.num_files_train=500
+    ++workload.output.folder=/tmp/bert_v100/8/20250326122657/generate ++workload.workflow.generate_data=True
+    ++workload.workflow.train=False; fi
+  - if [ -d /tmp/bert-8/ ] && grep -i 'error' /tmp/bert_v100/8/20250326122657/generate/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+bert_v100_1_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=bert_v100
+    ++workload.dataset.data_folder=/tmp/bert-8//data ++workload.checkpoint.checkpoint_folder=/tmp/bert_v100-1-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=313532 ++dataset.num_files_train=500
+    ++workload.output.folder=/tmp/bert_v100/8/20250326122657/train hydra.run.dir=/tmp/bert_v100/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/bert_v100/8/20250326122657/train/dlio.log; then echo 'Error
+    found in dlio.log'; exit 1; fi
+  needs:
+  - bert_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+bert_v100_1_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/bert_v100/8/20250326122657/train
+  - if find /tmp/bert_v100/8/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/bert_v100/8/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - bert_v100_1_8_train
+bert_v100_1_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/bert_v100/nodes-8/20250326122657/RAW/
+  - mv /tmp/bert_v100/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/bert_v100/nodes-8/20250326122657/RAW/
+  - mv /tmp/bert_v100/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/bert_v100/nodes-8/20250326122657/
+  - mv /tmp/bert_v100/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/bert_v100/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+bert_v100_1_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/bert_v100/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n bert_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - bert_v100_1_8_move
+bert_v100_1_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/bert_v100/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - bert_v100_1_8_compact
+bert_v100_1_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/bert_v100/8/20250326122657
+  needs:
+    job: bert_v100_1_8_compress_final
+    optional: true
+bert_v100_1_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=bert_v100
+    ++workload.dataset.data_folder=/tmp/bert-8//data ++workload.checkpoint.checkpoint_folder=/tmp/bert_v100-1-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=313532 ++dataset.num_files_train=500
+    ++workload.output.folder=/tmp/bert_v100/16/20250326122657/train hydra.run.dir=/tmp/bert_v100/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/bert_v100/16/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - bert_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+bert_v100_1_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/bert_v100/16/20250326122657/train
+  - if find /tmp/bert_v100/16/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/bert_v100/16/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - bert_v100_1_16_train
+bert_v100_1_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/bert_v100/nodes-16/20250326122657/RAW/
+  - mv /tmp/bert_v100/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/bert_v100/nodes-16/20250326122657/RAW/
+  - mv /tmp/bert_v100/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/bert_v100/nodes-16/20250326122657/
+  - mv /tmp/bert_v100/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/bert_v100/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+bert_v100_1_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/bert_v100/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n bert_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - bert_v100_1_16_move
+bert_v100_1_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/bert_v100/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - bert_v100_1_16_compact
+bert_v100_1_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/bert_v100/16/20250326122657
+  needs:
+    job: bert_v100_1_16_compress_final
+    optional: true
+bert_v100_1_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=bert_v100
+    ++workload.dataset.data_folder=/tmp/bert-8//data ++workload.checkpoint.checkpoint_folder=/tmp/bert_v100-1-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=313532 ++dataset.num_files_train=500
+    ++workload.output.folder=/tmp/bert_v100/32/20250326122657/train hydra.run.dir=/tmp/bert_v100/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/bert_v100/32/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - bert_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+bert_v100_1_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/bert_v100/32/20250326122657/train
+  - if find /tmp/bert_v100/32/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/bert_v100/32/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - bert_v100_1_32_train
+bert_v100_1_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/bert_v100/nodes-32/20250326122657/RAW/
+  - mv /tmp/bert_v100/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/bert_v100/nodes-32/20250326122657/RAW/
+  - mv /tmp/bert_v100/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/bert_v100/nodes-32/20250326122657/
+  - mv /tmp/bert_v100/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/bert_v100/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+bert_v100_1_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/bert_v100/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n bert_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - bert_v100_1_32_move
+bert_v100_1_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/bert_v100/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - bert_v100_1_32_compact
+bert_v100_1_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/bert_v100/32/20250326122657
+  needs:
+    job: bert_v100_1_32_compress_final
+    optional: true
+cosmoflow_generate_data:
+  stage: generate_data
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - if [ -d /tmp/cosmoflow-8/ ]; then echo 'Directory /tmp/cosmoflow-8/ already exists.
+    Skipping data generation.'; else flux run -N 8 --tasks-per-node=1 -q lqueue -t
+    1 --exclusive dlio_benchmark workload=cosmoflow_a100 ++workload.dataset.data_folder=/tmp/cosmoflow-8//data
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_a100/8/20250326122657/generate ++workload.workflow.generate_data=True
+    ++workload.workflow.train=False; fi
+  - if [ -d /tmp/cosmoflow-8/ ] && grep -i 'error' /tmp/cosmoflow_a100/8/20250326122657/generate/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+cosmoflow_a100_2_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_a100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_a100-2-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_a100/8/20250326122657/train hydra.run.dir=/tmp/cosmoflow_a100/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_a100/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_a100_2_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_a100/8/20250326122657/train
+  - if find /tmp/cosmoflow_a100/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_a100/8/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_a100_2_8_train
+cosmoflow_a100_2_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-8/20250326122657/RAW/
+  - mv /tmp/cosmoflow_a100/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-8/20250326122657/RAW/
+  - mv /tmp/cosmoflow_a100/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-8/20250326122657/
+  - mv /tmp/cosmoflow_a100/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_a100_2_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_a100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_a100_2_8_move
+cosmoflow_a100_2_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_a100_2_8_compact
+cosmoflow_a100_2_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_a100/8/20250326122657
+  needs:
+    job: cosmoflow_a100_2_8_compress_final
+    optional: true
+cosmoflow_a100_2_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_a100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_a100-2-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_a100/16/20250326122657/train hydra.run.dir=/tmp/cosmoflow_a100/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_a100/16/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_a100_2_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_a100/16/20250326122657/train
+  - if find /tmp/cosmoflow_a100/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_a100/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_a100_2_16_train
+cosmoflow_a100_2_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-16/20250326122657/RAW/
+  - mv /tmp/cosmoflow_a100/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-16/20250326122657/RAW/
+  - mv /tmp/cosmoflow_a100/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-16/20250326122657/
+  - mv /tmp/cosmoflow_a100/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_a100_2_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_a100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_a100_2_16_move
+cosmoflow_a100_2_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_a100_2_16_compact
+cosmoflow_a100_2_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_a100/16/20250326122657
+  needs:
+    job: cosmoflow_a100_2_16_compress_final
+    optional: true
+cosmoflow_a100_2_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_a100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_a100-2-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_a100/32/20250326122657/train hydra.run.dir=/tmp/cosmoflow_a100/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_a100/32/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_a100_2_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_a100/32/20250326122657/train
+  - if find /tmp/cosmoflow_a100/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_a100/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_a100_2_32_train
+cosmoflow_a100_2_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-32/20250326122657/RAW/
+  - mv /tmp/cosmoflow_a100/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-32/20250326122657/RAW/
+  - mv /tmp/cosmoflow_a100/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-32/20250326122657/
+  - mv /tmp/cosmoflow_a100/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_a100_2_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_a100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_a100_2_32_move
+cosmoflow_a100_2_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_a100/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_a100_2_32_compact
+cosmoflow_a100_2_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_a100/32/20250326122657
+  needs:
+    job: cosmoflow_a100_2_32_compress_final
+    optional: true
+cosmoflow_h100_3_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_h100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_h100-3-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_h100/8/20250326122657/train hydra.run.dir=/tmp/cosmoflow_h100/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_h100/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_h100_3_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_h100/8/20250326122657/train
+  - if find /tmp/cosmoflow_h100/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_h100/8/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_h100_3_8_train
+cosmoflow_h100_3_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-8/20250326122657/RAW/
+  - mv /tmp/cosmoflow_h100/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-8/20250326122657/RAW/
+  - mv /tmp/cosmoflow_h100/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-8/20250326122657/
+  - mv /tmp/cosmoflow_h100/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_h100_3_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_h100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_h100_3_8_move
+cosmoflow_h100_3_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_h100_3_8_compact
+cosmoflow_h100_3_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_h100/8/20250326122657
+  needs:
+    job: cosmoflow_h100_3_8_compress_final
+    optional: true
+cosmoflow_h100_3_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_h100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_h100-3-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_h100/16/20250326122657/train hydra.run.dir=/tmp/cosmoflow_h100/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_h100/16/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_h100_3_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_h100/16/20250326122657/train
+  - if find /tmp/cosmoflow_h100/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_h100/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_h100_3_16_train
+cosmoflow_h100_3_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-16/20250326122657/RAW/
+  - mv /tmp/cosmoflow_h100/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-16/20250326122657/RAW/
+  - mv /tmp/cosmoflow_h100/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-16/20250326122657/
+  - mv /tmp/cosmoflow_h100/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_h100_3_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_h100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_h100_3_16_move
+cosmoflow_h100_3_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_h100_3_16_compact
+cosmoflow_h100_3_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_h100/16/20250326122657
+  needs:
+    job: cosmoflow_h100_3_16_compress_final
+    optional: true
+cosmoflow_h100_3_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_h100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_h100-3-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_h100/32/20250326122657/train hydra.run.dir=/tmp/cosmoflow_h100/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_h100/32/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_h100_3_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_h100/32/20250326122657/train
+  - if find /tmp/cosmoflow_h100/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_h100/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_h100_3_32_train
+cosmoflow_h100_3_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-32/20250326122657/RAW/
+  - mv /tmp/cosmoflow_h100/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-32/20250326122657/RAW/
+  - mv /tmp/cosmoflow_h100/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-32/20250326122657/
+  - mv /tmp/cosmoflow_h100/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_h100_3_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_h100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_h100_3_32_move
+cosmoflow_h100_3_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_h100/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_h100_3_32_compact
+cosmoflow_h100_3_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_h100/32/20250326122657
+  needs:
+    job: cosmoflow_h100_3_32_compress_final
+    optional: true
+cosmoflow_v100_4_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_v100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_v100-4-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_v100/8/20250326122657/train hydra.run.dir=/tmp/cosmoflow_v100/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_v100/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_v100_4_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_v100/8/20250326122657/train
+  - if find /tmp/cosmoflow_v100/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_v100/8/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_v100_4_8_train
+cosmoflow_v100_4_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-8/20250326122657/RAW/
+  - mv /tmp/cosmoflow_v100/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-8/20250326122657/RAW/
+  - mv /tmp/cosmoflow_v100/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-8/20250326122657/
+  - mv /tmp/cosmoflow_v100/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_v100_4_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_v100_4_8_move
+cosmoflow_v100_4_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_v100_4_8_compact
+cosmoflow_v100_4_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_v100/8/20250326122657
+  needs:
+    job: cosmoflow_v100_4_8_compress_final
+    optional: true
+cosmoflow_v100_4_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_v100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_v100-4-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_v100/16/20250326122657/train hydra.run.dir=/tmp/cosmoflow_v100/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_v100/16/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_v100_4_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_v100/16/20250326122657/train
+  - if find /tmp/cosmoflow_v100/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_v100/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_v100_4_16_train
+cosmoflow_v100_4_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-16/20250326122657/RAW/
+  - mv /tmp/cosmoflow_v100/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-16/20250326122657/RAW/
+  - mv /tmp/cosmoflow_v100/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-16/20250326122657/
+  - mv /tmp/cosmoflow_v100/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_v100_4_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_v100_4_16_move
+cosmoflow_v100_4_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_v100_4_16_compact
+cosmoflow_v100_4_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_v100/16/20250326122657
+  needs:
+    job: cosmoflow_v100_4_16_compress_final
+    optional: true
+cosmoflow_v100_4_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=cosmoflow_v100
+    ++workload.dataset.data_folder=/tmp/cosmoflow-8//data ++workload.checkpoint.checkpoint_folder=/tmp/cosmoflow_v100-4-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=388727
+    ++workload.output.folder=/tmp/cosmoflow_v100/32/20250326122657/train hydra.run.dir=/tmp/cosmoflow_v100/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/cosmoflow_v100/32/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - cosmoflow_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+cosmoflow_v100_4_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/cosmoflow_v100/32/20250326122657/train
+  - if find /tmp/cosmoflow_v100/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/cosmoflow_v100/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_v100_4_32_train
+cosmoflow_v100_4_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-32/20250326122657/RAW/
+  - mv /tmp/cosmoflow_v100/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-32/20250326122657/RAW/
+  - mv /tmp/cosmoflow_v100/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-32/20250326122657/
+  - mv /tmp/cosmoflow_v100/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+cosmoflow_v100_4_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n cosmoflow_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - cosmoflow_v100_4_32_move
+cosmoflow_v100_4_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/cosmoflow_v100/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - cosmoflow_v100_4_32_compact
+cosmoflow_v100_4_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/cosmoflow_v100/32/20250326122657
+  needs:
+    job: cosmoflow_v100_4_32_compress_final
+    optional: true
+dlrm_generate_data:
+  stage: generate_data
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - if [ -d /tmp/dlrm-63/ ]; then echo 'Directory /tmp/dlrm-63/ already exists. Skipping
+    data generation.'; else flux run -N 63 --tasks-per-node=1 -q lqueue -t 1 --exclusive
+    dlio_benchmark workload=dlrm ++workload.dataset.data_folder=/tmp/dlrm-63//data
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=3355443 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/dlrm/63/20250326122657/generate ++workload.workflow.generate_data=True
+    ++workload.workflow.train=False; fi
+  - if [ -d /tmp/dlrm-63/ ] && grep -i 'error' /tmp/dlrm/63/20250326122657/generate/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+dlrm_6_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=dlrm
+    ++workload.dataset.data_folder=/tmp/dlrm-63//data ++workload.checkpoint.checkpoint_folder=/tmp/dlrm-6-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=3355443 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/dlrm/8/20250326122657/train hydra.run.dir=/tmp/dlrm/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/dlrm/8/20250326122657/train/dlio.log; then echo 'Error
+    found in dlio.log'; exit 1; fi
+  needs:
+  - dlrm_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+dlrm_6_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/dlrm/8/20250326122657/train
+  - if find /tmp/dlrm/8/20250326122657/train -type f -name '*.pfw' | grep -q .; then
+    echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/dlrm/8/20250326122657/train -type f -name '*.pfw.gz' | grep -q
+    .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - dlrm_6_8_train
+dlrm_6_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/dlrm/nodes-8/20250326122657/RAW/
+  - mv /tmp/dlrm/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/dlrm/nodes-8/20250326122657/RAW/
+  - mv /tmp/dlrm/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/dlrm/nodes-8/20250326122657/
+  - mv /tmp/dlrm/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/dlrm/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+dlrm_6_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/dlrm/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n dlrm
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - dlrm_6_8_move
+dlrm_6_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/dlrm/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - dlrm_6_8_compact
+dlrm_6_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/dlrm/8/20250326122657
+  needs:
+    job: dlrm_6_8_compress_final
+    optional: true
+dlrm_6_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=dlrm
+    ++workload.dataset.data_folder=/tmp/dlrm-63//data ++workload.checkpoint.checkpoint_folder=/tmp/dlrm-6-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=3355443 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/dlrm/16/20250326122657/train hydra.run.dir=/tmp/dlrm/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/dlrm/16/20250326122657/train/dlio.log; then echo 'Error
+    found in dlio.log'; exit 1; fi
+  needs:
+  - dlrm_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+dlrm_6_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/dlrm/16/20250326122657/train
+  - if find /tmp/dlrm/16/20250326122657/train -type f -name '*.pfw' | grep -q .; then
+    echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/dlrm/16/20250326122657/train -type f -name '*.pfw.gz' | grep -q
+    .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - dlrm_6_16_train
+dlrm_6_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/dlrm/nodes-16/20250326122657/RAW/
+  - mv /tmp/dlrm/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/dlrm/nodes-16/20250326122657/RAW/
+  - mv /tmp/dlrm/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/dlrm/nodes-16/20250326122657/
+  - mv /tmp/dlrm/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/dlrm/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+dlrm_6_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/dlrm/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n dlrm
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - dlrm_6_16_move
+dlrm_6_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/dlrm/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - dlrm_6_16_compact
+dlrm_6_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/dlrm/16/20250326122657
+  needs:
+    job: dlrm_6_16_compress_final
+    optional: true
+dlrm_6_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=dlrm
+    ++workload.dataset.data_folder=/tmp/dlrm-63//data ++workload.checkpoint.checkpoint_folder=/tmp/dlrm-6-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=3355443 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/dlrm/32/20250326122657/train hydra.run.dir=/tmp/dlrm/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/dlrm/32/20250326122657/train/dlio.log; then echo 'Error
+    found in dlio.log'; exit 1; fi
+  needs:
+  - dlrm_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+dlrm_6_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/dlrm/32/20250326122657/train
+  - if find /tmp/dlrm/32/20250326122657/train -type f -name '*.pfw' | grep -q .; then
+    echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/dlrm/32/20250326122657/train -type f -name '*.pfw.gz' | grep -q
+    .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - dlrm_6_32_train
+dlrm_6_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/dlrm/nodes-32/20250326122657/RAW/
+  - mv /tmp/dlrm/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/dlrm/nodes-32/20250326122657/RAW/
+  - mv /tmp/dlrm/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/dlrm/nodes-32/20250326122657/
+  - mv /tmp/dlrm/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/dlrm/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+dlrm_6_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/dlrm/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n dlrm
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - dlrm_6_32_move
+dlrm_6_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/dlrm/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - dlrm_6_32_compact
+dlrm_6_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/dlrm/32/20250326122657
+  needs:
+    job: dlrm_6_32_compress_final
+    optional: true
+llama_generate_data:
+  stage: generate_data
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - if [ -d /tmp/llama-32/ ]; then echo 'Directory /tmp/llama-32/ already exists.
+    Skipping data generation.'; else flux run -N 32 --tasks-per-node=1 -q lqueue -t
+    1 --exclusive dlio_benchmark workload=llama_70b ++workload.dataset.data_folder=/tmp/llama-32//data
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_70b/32/20250326122657/generate ++workload.workflow.generate_data=True
+    ++workload.workflow.train=False; fi
+  - if [ -d /tmp/llama-32/ ] && grep -i 'error' /tmp/llama_70b/32/20250326122657/generate/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+llama_70b_9_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_70b
+    ++workload.dataset.data_folder=/tmp/llama-32//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_70b-9-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_70b/32/20250326122657/train hydra.run.dir=/tmp/llama_70b/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_70b/32/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_70b_9_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_70b/32/20250326122657/train
+  - if find /tmp/llama_70b/32/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_70b/32/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_9_32_train
+llama_70b_9_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_70b/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_70b/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_70b/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_70b/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_70b/nodes-32/20250326122657/
+  - mv /tmp/llama_70b/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_70b/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+llama_70b_9_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_70b/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_70b
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_9_32_move
+llama_70b_9_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_70b/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_70b_9_32_compact
+llama_70b_9_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_70b/32/20250326122657
+  needs:
+    job: llama_70b_9_32_compress_final
+    optional: true
+llama_70b_zero3_10_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_70b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_70b_zero3-10-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_70b_zero3/8/20250326122657/train hydra.run.dir=/tmp/llama_70b_zero3/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_70b_zero3/8/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_70b_zero3_10_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_70b_zero3/8/20250326122657/train
+  - if find /tmp/llama_70b_zero3/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_70b_zero3/8/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_zero3_10_8_train
+llama_70b_zero3_10_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_70b_zero3/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_70b_zero3/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-8/20250326122657/
+  - mv /tmp/llama_70b_zero3/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+llama_70b_zero3_10_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_70b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_zero3_10_8_move
+llama_70b_zero3_10_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_70b_zero3_10_8_compact
+llama_70b_zero3_10_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_70b_zero3/8/20250326122657
+  needs:
+    job: llama_70b_zero3_10_8_compress_final
+    optional: true
+llama_70b_zero3_10_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_70b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_70b_zero3-10-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_70b_zero3/16/20250326122657/train hydra.run.dir=/tmp/llama_70b_zero3/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_70b_zero3/16/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_70b_zero3_10_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_70b_zero3/16/20250326122657/train
+  - if find /tmp/llama_70b_zero3/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_70b_zero3/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_zero3_10_16_train
+llama_70b_zero3_10_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_70b_zero3/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_70b_zero3/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-16/20250326122657/
+  - mv /tmp/llama_70b_zero3/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+llama_70b_zero3_10_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_70b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_zero3_10_16_move
+llama_70b_zero3_10_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_70b_zero3_10_16_compact
+llama_70b_zero3_10_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_70b_zero3/16/20250326122657
+  needs:
+    job: llama_70b_zero3_10_16_compress_final
+    optional: true
+llama_70b_zero3_10_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_70b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_70b_zero3-10-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_70b_zero3/32/20250326122657/train hydra.run.dir=/tmp/llama_70b_zero3/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_70b_zero3/32/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_70b_zero3_10_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_70b_zero3/32/20250326122657/train
+  - if find /tmp/llama_70b_zero3/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_70b_zero3/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_zero3_10_32_train
+llama_70b_zero3_10_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_70b_zero3/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_70b_zero3/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-32/20250326122657/
+  - mv /tmp/llama_70b_zero3/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+llama_70b_zero3_10_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_70b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_70b_zero3_10_32_move
+llama_70b_zero3_10_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_70b_zero3/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_70b_zero3_10_32_compact
+llama_70b_zero3_10_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_70b_zero3/32/20250326122657
+  needs:
+    job: llama_70b_zero3_10_32_compress_final
+    optional: true
+llama_7b_11_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_7b
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_7b-11-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_7b/8/20250326122657/train hydra.run.dir=/tmp/llama_7b/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_7b/8/20250326122657/train/dlio.log; then echo 'Error
+    found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_7b_11_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_7b/8/20250326122657/train
+  - if find /tmp/llama_7b/8/20250326122657/train -type f -name '*.pfw' | grep -q .;
+    then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_7b/8/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_11_8_train
+llama_7b_11_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_7b/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_7b/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_7b/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_7b/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_7b/nodes-8/20250326122657/
+  - mv /tmp/llama_7b/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_7b/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+llama_7b_11_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_7b/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_7b
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_11_8_move
+llama_7b_11_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_7b/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_7b_11_8_compact
+llama_7b_11_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_7b/8/20250326122657
+  needs:
+    job: llama_7b_11_8_compress_final
+    optional: true
+llama_7b_11_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_7b
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_7b-11-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_7b/16/20250326122657/train hydra.run.dir=/tmp/llama_7b/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_7b/16/20250326122657/train/dlio.log; then echo 'Error
+    found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_7b_11_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_7b/16/20250326122657/train
+  - if find /tmp/llama_7b/16/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_7b/16/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_11_16_train
+llama_7b_11_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_7b/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_7b/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_7b/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_7b/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_7b/nodes-16/20250326122657/
+  - mv /tmp/llama_7b/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_7b/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+llama_7b_11_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_7b/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_7b
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_11_16_move
+llama_7b_11_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_7b/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_7b_11_16_compact
+llama_7b_11_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_7b/16/20250326122657
+  needs:
+    job: llama_7b_11_16_compress_final
+    optional: true
+llama_7b_11_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_7b
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_7b-11-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_7b/32/20250326122657/train hydra.run.dir=/tmp/llama_7b/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_7b/32/20250326122657/train/dlio.log; then echo 'Error
+    found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_7b_11_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_7b/32/20250326122657/train
+  - if find /tmp/llama_7b/32/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_7b/32/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_11_32_train
+llama_7b_11_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_7b/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_7b/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_7b/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_7b/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_7b/nodes-32/20250326122657/
+  - mv /tmp/llama_7b/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_7b/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+llama_7b_11_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_7b/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_7b
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_11_32_move
+llama_7b_11_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_7b/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_7b_11_32_compact
+llama_7b_11_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_7b/32/20250326122657
+  needs:
+    job: llama_7b_11_32_compress_final
+    optional: true
+llama_7b_zero3_12_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_7b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_7b_zero3-12-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_7b_zero3/8/20250326122657/train hydra.run.dir=/tmp/llama_7b_zero3/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_7b_zero3/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_7b_zero3_12_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_7b_zero3/8/20250326122657/train
+  - if find /tmp/llama_7b_zero3/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_7b_zero3/8/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_zero3_12_8_train
+llama_7b_zero3_12_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_7b_zero3/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_7b_zero3/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-8/20250326122657/
+  - mv /tmp/llama_7b_zero3/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+llama_7b_zero3_12_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_7b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_zero3_12_8_move
+llama_7b_zero3_12_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_7b_zero3_12_8_compact
+llama_7b_zero3_12_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_7b_zero3/8/20250326122657
+  needs:
+    job: llama_7b_zero3_12_8_compress_final
+    optional: true
+llama_7b_zero3_12_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_7b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_7b_zero3-12-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_7b_zero3/16/20250326122657/train hydra.run.dir=/tmp/llama_7b_zero3/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_7b_zero3/16/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_7b_zero3_12_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_7b_zero3/16/20250326122657/train
+  - if find /tmp/llama_7b_zero3/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_7b_zero3/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_zero3_12_16_train
+llama_7b_zero3_12_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_7b_zero3/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_7b_zero3/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-16/20250326122657/
+  - mv /tmp/llama_7b_zero3/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+llama_7b_zero3_12_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_7b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_zero3_12_16_move
+llama_7b_zero3_12_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_7b_zero3_12_16_compact
+llama_7b_zero3_12_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_7b_zero3/16/20250326122657
+  needs:
+    job: llama_7b_zero3_12_16_compress_final
+    optional: true
+llama_7b_zero3_12_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_7b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_7b_zero3-12-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_7b_zero3/32/20250326122657/train hydra.run.dir=/tmp/llama_7b_zero3/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_7b_zero3/32/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_7b_zero3_12_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_7b_zero3/32/20250326122657/train
+  - if find /tmp/llama_7b_zero3/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_7b_zero3/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_zero3_12_32_train
+llama_7b_zero3_12_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_7b_zero3/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_7b_zero3/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-32/20250326122657/
+  - mv /tmp/llama_7b_zero3/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+llama_7b_zero3_12_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_7b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_7b_zero3_12_32_move
+llama_7b_zero3_12_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_7b_zero3/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_7b_zero3_12_32_compact
+llama_7b_zero3_12_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_7b_zero3/32/20250326122657
+  needs:
+    job: llama_7b_zero3_12_32_compress_final
+    optional: true
+llama_8b_zero3_13_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_8b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_8b_zero3-13-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_8b_zero3/8/20250326122657/train hydra.run.dir=/tmp/llama_8b_zero3/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_8b_zero3/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_8b_zero3_13_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_8b_zero3/8/20250326122657/train
+  - if find /tmp/llama_8b_zero3/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_8b_zero3/8/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_8b_zero3_13_8_train
+llama_8b_zero3_13_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_8b_zero3/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-8/20250326122657/RAW/
+  - mv /tmp/llama_8b_zero3/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-8/20250326122657/
+  - mv /tmp/llama_8b_zero3/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+llama_8b_zero3_13_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_8b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_8b_zero3_13_8_move
+llama_8b_zero3_13_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_8b_zero3_13_8_compact
+llama_8b_zero3_13_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_8b_zero3/8/20250326122657
+  needs:
+    job: llama_8b_zero3_13_8_compress_final
+    optional: true
+llama_8b_zero3_13_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_8b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_8b_zero3-13-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_8b_zero3/16/20250326122657/train hydra.run.dir=/tmp/llama_8b_zero3/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_8b_zero3/16/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_8b_zero3_13_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_8b_zero3/16/20250326122657/train
+  - if find /tmp/llama_8b_zero3/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_8b_zero3/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_8b_zero3_13_16_train
+llama_8b_zero3_13_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_8b_zero3/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-16/20250326122657/RAW/
+  - mv /tmp/llama_8b_zero3/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-16/20250326122657/
+  - mv /tmp/llama_8b_zero3/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+llama_8b_zero3_13_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_8b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_8b_zero3_13_16_move
+llama_8b_zero3_13_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_8b_zero3_13_16_compact
+llama_8b_zero3_13_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_8b_zero3/16/20250326122657
+  needs:
+    job: llama_8b_zero3_13_16_compress_final
+    optional: true
+llama_8b_zero3_13_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=llama_8b_zero3
+    ++workload.dataset.data_folder=/tmp/llama-8//data ++workload.checkpoint.checkpoint_folder=/tmp/llama_8b_zero3-13-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1048576 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/llama_8b_zero3/32/20250326122657/train hydra.run.dir=/tmp/llama_8b_zero3/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/llama_8b_zero3/32/20250326122657/train/dlio.log; then
+    echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - llama_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+llama_8b_zero3_13_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/llama_8b_zero3/32/20250326122657/train
+  - if find /tmp/llama_8b_zero3/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/llama_8b_zero3/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_8b_zero3_13_32_train
+llama_8b_zero3_13_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_8b_zero3/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-32/20250326122657/RAW/
+  - mv /tmp/llama_8b_zero3/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-32/20250326122657/
+  - mv /tmp/llama_8b_zero3/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+llama_8b_zero3_13_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n llama_8b_zero3
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - llama_8b_zero3_13_32_move
+llama_8b_zero3_13_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/llama_8b_zero3/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - llama_8b_zero3_13_32_compact
+llama_8b_zero3_13_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/llama_8b_zero3/32/20250326122657
+  needs:
+    job: llama_8b_zero3_13_32_compress_final
+    optional: true
+megatron_generate_data:
+  stage: generate_data
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - if [ -d /tmp/megatron-33/ ]; then echo 'Directory /tmp/megatron-33/ already exists.
+    Skipping data generation.'; else flux run -N 33 --tasks-per-node=1 -q lqueue -t
+    1 --exclusive dlio_benchmark workload=megatron_deepspeed_LLNL ++workload.dataset.data_folder=/tmp/megatron-33//data
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=277203535 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/megatron_deepspeed_LLNL/33/20250326122657/generate
+    ++workload.workflow.generate_data=True ++workload.workflow.train=False; fi
+  - if [ -d /tmp/megatron-33/ ] && grep -i 'error' /tmp/megatron_deepspeed_LLNL/33/20250326122657/generate/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+megatron_deepspeed_LLNL_14_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=megatron_deepspeed_LLNL
+    ++workload.dataset.data_folder=/tmp/megatron-33//data ++workload.checkpoint.checkpoint_folder=/tmp/megatron_deepspeed_LLNL-14-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=277203535 ++dataset.num_files_train=1
+    ++workload.output.folder=/tmp/megatron_deepspeed_LLNL/32/20250326122657/train
+    hydra.run.dir=/tmp/megatron_deepspeed_LLNL/32/20250326122657/train ++workload.workflow.generate_data=False
+    ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/megatron_deepspeed_LLNL/32/20250326122657/train/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+  needs:
+  - megatron_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+megatron_deepspeed_LLNL_14_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/megatron_deepspeed_LLNL/32/20250326122657/train
+  - if find /tmp/megatron_deepspeed_LLNL/32/20250326122657/train -type f -name '*.pfw'
+    | grep -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/megatron_deepspeed_LLNL/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - megatron_deepspeed_LLNL_14_32_train
+megatron_deepspeed_LLNL_14_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/megatron_deepspeed_LLNL/nodes-32/20250326122657/RAW/
+  - mv /tmp/megatron_deepspeed_LLNL/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/megatron_deepspeed_LLNL/nodes-32/20250326122657/RAW/
+  - mv /tmp/megatron_deepspeed_LLNL/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/megatron_deepspeed_LLNL/nodes-32/20250326122657/
+  - mv /tmp/megatron_deepspeed_LLNL/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/megatron_deepspeed_LLNL/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+megatron_deepspeed_LLNL_14_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/megatron_deepspeed_LLNL/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n megatron_deepspeed_LLNL
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - megatron_deepspeed_LLNL_14_32_move
+megatron_deepspeed_LLNL_14_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/megatron_deepspeed_LLNL/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - megatron_deepspeed_LLNL_14_32_compact
+megatron_deepspeed_LLNL_14_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/megatron_deepspeed_LLNL/32/20250326122657
+  needs:
+    job: megatron_deepspeed_LLNL_14_32_compress_final
+    optional: true
+resnet50_generate_data:
+  stage: generate_data
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - if [ -d /tmp/resnet50-8/ ]; then echo 'Directory /tmp/resnet50-8/ already exists.
+    Skipping data generation.'; else flux run -N 8 --tasks-per-node=1 -q lqueue -t
+    1 --exclusive dlio_benchmark workload=resnet50_a100 ++workload.dataset.data_folder=/tmp/resnet50-8//data
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_a100/8/20250326122657/generate ++workload.workflow.generate_data=True
+    ++workload.workflow.train=False; fi
+  - if [ -d /tmp/resnet50-8/ ] && grep -i 'error' /tmp/resnet50_a100/8/20250326122657/generate/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+resnet50_a100_15_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_a100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_a100-15-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_a100/8/20250326122657/train hydra.run.dir=/tmp/resnet50_a100/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_a100/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_a100_15_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_a100/8/20250326122657/train
+  - if find /tmp/resnet50_a100/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_a100/8/20250326122657/train -type f -name '*.pfw.gz' |
+    grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_a100_15_8_train
+resnet50_a100_15_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_a100/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_a100/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-8/20250326122657/
+  - mv /tmp/resnet50_a100/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_a100_15_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_a100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_a100_15_8_move
+resnet50_a100_15_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_a100_15_8_compact
+resnet50_a100_15_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_a100/8/20250326122657
+  needs:
+    job: resnet50_a100_15_8_compress_final
+    optional: true
+resnet50_a100_15_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_a100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_a100-15-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_a100/16/20250326122657/train hydra.run.dir=/tmp/resnet50_a100/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_a100/16/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_a100_15_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_a100/16/20250326122657/train
+  - if find /tmp/resnet50_a100/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_a100/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_a100_15_16_train
+resnet50_a100_15_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_a100/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_a100/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-16/20250326122657/
+  - mv /tmp/resnet50_a100/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_a100_15_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_a100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_a100_15_16_move
+resnet50_a100_15_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_a100_15_16_compact
+resnet50_a100_15_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_a100/16/20250326122657
+  needs:
+    job: resnet50_a100_15_16_compress_final
+    optional: true
+resnet50_a100_15_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_a100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_a100-15-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_a100/32/20250326122657/train hydra.run.dir=/tmp/resnet50_a100/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_a100/32/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_a100_15_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_a100/32/20250326122657/train
+  - if find /tmp/resnet50_a100/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_a100/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_a100_15_32_train
+resnet50_a100_15_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_a100/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_a100/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-32/20250326122657/
+  - mv /tmp/resnet50_a100/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_a100_15_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_a100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_a100_15_32_move
+resnet50_a100_15_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_a100/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_a100_15_32_compact
+resnet50_a100_15_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_a100/32/20250326122657
+  needs:
+    job: resnet50_a100_15_32_compress_final
+    optional: true
+resnet50_h100_16_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_h100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_h100-16-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_h100/8/20250326122657/train hydra.run.dir=/tmp/resnet50_h100/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_h100/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_h100_16_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_h100/8/20250326122657/train
+  - if find /tmp/resnet50_h100/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_h100/8/20250326122657/train -type f -name '*.pfw.gz' |
+    grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_h100_16_8_train
+resnet50_h100_16_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_h100/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_h100/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-8/20250326122657/
+  - mv /tmp/resnet50_h100/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_h100_16_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_h100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_h100_16_8_move
+resnet50_h100_16_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_h100_16_8_compact
+resnet50_h100_16_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_h100/8/20250326122657
+  needs:
+    job: resnet50_h100_16_8_compress_final
+    optional: true
+resnet50_h100_16_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_h100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_h100-16-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_h100/16/20250326122657/train hydra.run.dir=/tmp/resnet50_h100/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_h100/16/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_h100_16_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_h100/16/20250326122657/train
+  - if find /tmp/resnet50_h100/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_h100/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_h100_16_16_train
+resnet50_h100_16_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_h100/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_h100/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-16/20250326122657/
+  - mv /tmp/resnet50_h100/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_h100_16_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_h100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_h100_16_16_move
+resnet50_h100_16_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_h100_16_16_compact
+resnet50_h100_16_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_h100/16/20250326122657
+  needs:
+    job: resnet50_h100_16_16_compress_final
+    optional: true
+resnet50_h100_16_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_h100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_h100-16-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_h100/32/20250326122657/train hydra.run.dir=/tmp/resnet50_h100/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_h100/32/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_h100_16_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_h100/32/20250326122657/train
+  - if find /tmp/resnet50_h100/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_h100/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_h100_16_32_train
+resnet50_h100_16_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_h100/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_h100/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-32/20250326122657/
+  - mv /tmp/resnet50_h100/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_h100_16_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_h100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_h100_16_32_move
+resnet50_h100_16_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_h100/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_h100_16_32_compact
+resnet50_h100_16_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_h100/32/20250326122657
+  needs:
+    job: resnet50_h100_16_32_compress_final
+    optional: true
+resnet50_tf_17_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_tf
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_tf-17-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_tf/8/20250326122657/train hydra.run.dir=/tmp/resnet50_tf/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_tf/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_tf_17_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_tf/8/20250326122657/train
+  - if find /tmp/resnet50_tf/8/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_tf/8/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_tf_17_8_train
+resnet50_tf_17_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_tf/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_tf/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-8/20250326122657/
+  - mv /tmp/resnet50_tf/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_tf_17_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_tf
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_tf_17_8_move
+resnet50_tf_17_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_tf_17_8_compact
+resnet50_tf_17_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_tf/8/20250326122657
+  needs:
+    job: resnet50_tf_17_8_compress_final
+    optional: true
+resnet50_tf_17_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_tf
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_tf-17-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_tf/16/20250326122657/train hydra.run.dir=/tmp/resnet50_tf/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_tf/16/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_tf_17_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_tf/16/20250326122657/train
+  - if find /tmp/resnet50_tf/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_tf/16/20250326122657/train -type f -name '*.pfw.gz' |
+    grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_tf_17_16_train
+resnet50_tf_17_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_tf/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_tf/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-16/20250326122657/
+  - mv /tmp/resnet50_tf/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_tf_17_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_tf
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_tf_17_16_move
+resnet50_tf_17_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_tf_17_16_compact
+resnet50_tf_17_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_tf/16/20250326122657
+  needs:
+    job: resnet50_tf_17_16_compress_final
+    optional: true
+resnet50_tf_17_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_tf
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_tf-17-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_tf/32/20250326122657/train hydra.run.dir=/tmp/resnet50_tf/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_tf/32/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_tf_17_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_tf/32/20250326122657/train
+  - if find /tmp/resnet50_tf/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_tf/32/20250326122657/train -type f -name '*.pfw.gz' |
+    grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_tf_17_32_train
+resnet50_tf_17_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_tf/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_tf/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-32/20250326122657/
+  - mv /tmp/resnet50_tf/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_tf_17_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_tf
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_tf_17_32_move
+resnet50_tf_17_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_tf/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_tf_17_32_compact
+resnet50_tf_17_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_tf/32/20250326122657
+  needs:
+    job: resnet50_tf_17_32_compress_final
+    optional: true
+resnet50_v100_18_8_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_v100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_v100-18-8//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_v100/8/20250326122657/train hydra.run.dir=/tmp/resnet50_v100/8/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_v100/8/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_v100_18_8_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_v100/8/20250326122657/train
+  - if find /tmp/resnet50_v100/8/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_v100/8/20250326122657/train -type f -name '*.pfw.gz' |
+    grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_v100_18_8_train
+resnet50_v100_18_8_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_v100/8/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-8/20250326122657/RAW/
+  - mv /tmp/resnet50_v100/8/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-8/20250326122657/
+  - mv /tmp/resnet50_v100/8/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-8/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_v100_18_8_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-8/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_v100_18_8_move
+resnet50_v100_18_8_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-8/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_v100_18_8_compact
+resnet50_v100_18_8_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 8 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_v100/8/20250326122657
+  needs:
+    job: resnet50_v100_18_8_compress_final
+    optional: true
+resnet50_v100_18_16_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_v100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_v100-18-16//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_v100/16/20250326122657/train hydra.run.dir=/tmp/resnet50_v100/16/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_v100/16/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_v100_18_16_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_v100/16/20250326122657/train
+  - if find /tmp/resnet50_v100/16/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_v100/16/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_v100_18_16_train
+resnet50_v100_18_16_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_v100/16/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-16/20250326122657/RAW/
+  - mv /tmp/resnet50_v100/16/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-16/20250326122657/
+  - mv /tmp/resnet50_v100/16/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-16/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_v100_18_16_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-16/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_v100_18_16_move
+resnet50_v100_18_16_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-16/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_v100_18_16_compact
+resnet50_v100_18_16_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 16 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_v100/16/20250326122657
+  needs:
+    job: resnet50_v100_18_16_compress_final
+    optional: true
+resnet50_v100_18_32_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=resnet50_v100
+    ++workload.dataset.data_folder=/tmp/resnet50-8//data ++workload.checkpoint.checkpoint_folder=/tmp/resnet50_v100-18-32//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1251 ++dataset.num_files_train=1024
+    ++workload.output.folder=/tmp/resnet50_v100/32/20250326122657/train hydra.run.dir=/tmp/resnet50_v100/32/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/resnet50_v100/32/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - resnet50_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+resnet50_v100_18_32_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/resnet50_v100/32/20250326122657/train
+  - if find /tmp/resnet50_v100/32/20250326122657/train -type f -name '*.pfw' | grep
+    -q .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/resnet50_v100/32/20250326122657/train -type f -name '*.pfw.gz'
+    | grep -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_v100_18_32_train
+resnet50_v100_18_32_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_v100/32/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-32/20250326122657/RAW/
+  - mv /tmp/resnet50_v100/32/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-32/20250326122657/
+  - mv /tmp/resnet50_v100/32/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-32/20250326122657/
+  needs:
+  - create_directory_common
+resnet50_v100_18_32_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-32/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n resnet50_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - resnet50_v100_18_32_move
+resnet50_v100_18_32_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/resnet50_v100/nodes-32/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - resnet50_v100_18_32_compact
+resnet50_v100_18_32_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 32 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/resnet50_v100/32/20250326122657
+  needs:
+    job: resnet50_v100_18_32_compress_final
+    optional: true
+unet3d_generate_data:
+  stage: generate_data
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - if [ -d /tmp/unet3d-2/ ]; then echo 'Directory /tmp/unet3d-2/ already exists.
+    Skipping data generation.'; else flux run -N 2 --tasks-per-node=1 -q lqueue -t
+    1 --exclusive dlio_benchmark workload=unet3d_a100 ++workload.dataset.data_folder=/tmp/unet3d-2//data
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=168
+    ++workload.output.folder=/tmp/unet3d_a100/2/20250326122657/generate ++workload.workflow.generate_data=True
+    ++workload.workflow.train=False; fi
+  - if [ -d /tmp/unet3d-2/ ] && grep -i 'error' /tmp/unet3d_a100/2/20250326122657/generate/dlio.log;
+    then echo 'Error found in dlio.log'; exit 1; fi
+unet3d_a100_19_2_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 2 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=unet3d_a100
+    ++workload.dataset.data_folder=/tmp/unet3d-2//data ++workload.checkpoint.checkpoint_folder=/tmp/unet3d_a100-19-2//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=168
+    ++workload.output.folder=/tmp/unet3d_a100/2/20250326122657/train hydra.run.dir=/tmp/unet3d_a100/2/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/unet3d_a100/2/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - unet3d_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+unet3d_a100_19_2_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 2 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/unet3d_a100/2/20250326122657/train
+  - if find /tmp/unet3d_a100/2/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/unet3d_a100/2/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - unet3d_a100_19_2_train
+unet3d_a100_19_2_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/unet3d_a100/nodes-2/20250326122657/RAW/
+  - mv /tmp/unet3d_a100/2/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/unet3d_a100/nodes-2/20250326122657/RAW/
+  - mv /tmp/unet3d_a100/2/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/unet3d_a100/nodes-2/20250326122657/
+  - mv /tmp/unet3d_a100/2/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/unet3d_a100/nodes-2/20250326122657/
+  needs:
+  - create_directory_common
+unet3d_a100_19_2_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/unet3d_a100/nodes-2/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n unet3d_a100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - unet3d_a100_19_2_move
+unet3d_a100_19_2_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/unet3d_a100/nodes-2/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - unet3d_a100_19_2_compact
+unet3d_a100_19_2_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 2 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/unet3d_a100/2/20250326122657
+  needs:
+    job: unet3d_a100_19_2_compress_final
+    optional: true
+unet3d_h100_20_2_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 2 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=unet3d_h100
+    ++workload.dataset.data_folder=/tmp/unet3d-2//data ++workload.checkpoint.checkpoint_folder=/tmp/unet3d_h100-20-2//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=168
+    ++workload.output.folder=/tmp/unet3d_h100/2/20250326122657/train hydra.run.dir=/tmp/unet3d_h100/2/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/unet3d_h100/2/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - unet3d_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+unet3d_h100_20_2_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 2 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/unet3d_h100/2/20250326122657/train
+  - if find /tmp/unet3d_h100/2/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/unet3d_h100/2/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - unet3d_h100_20_2_train
+unet3d_h100_20_2_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/unet3d_h100/nodes-2/20250326122657/RAW/
+  - mv /tmp/unet3d_h100/2/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/unet3d_h100/nodes-2/20250326122657/RAW/
+  - mv /tmp/unet3d_h100/2/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/unet3d_h100/nodes-2/20250326122657/
+  - mv /tmp/unet3d_h100/2/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/unet3d_h100/nodes-2/20250326122657/
+  needs:
+  - create_directory_common
+unet3d_h100_20_2_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/unet3d_h100/nodes-2/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n unet3d_h100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - unet3d_h100_20_2_move
+unet3d_h100_20_2_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/unet3d_h100/nodes-2/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - unet3d_h100_20_2_compact
+unet3d_h100_20_2_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 2 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/unet3d_h100/2/20250326122657
+  needs:
+    job: unet3d_h100_20_2_compress_final
+    optional: true
+unet3d_v100_21_4_train:
+  stage: train
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dlio_benchmark;
+  - flux run -N 4 --tasks-per-node=1 -q lqueue -t 1 --exclusive dlio_benchmark workload=unet3d_v100
+    ++workload.dataset.data_folder=/tmp/unet3d-4//data ++workload.checkpoint.checkpoint_folder=/tmp/unet3d_v100-21-4//checkpoint
+    ++workload.train.epochs=1 ++dataset.num_samples_per_file=1 ++dataset.num_files_train=168
+    ++workload.output.folder=/tmp/unet3d_v100/4/20250326122657/train hydra.run.dir=/tmp/unet3d_v100/4/20250326122657/train
+    ++workload.workflow.generate_data=False ++workload.workflow.train=True
+  - if grep -i 'error' /tmp/unet3d_v100/4/20250326122657/train/dlio.log; then echo
+    'Error found in dlio.log'; exit 1; fi
+  needs:
+  - unet3d_generate_data
+  variables:
+    DFTRACER_ENABLE: '1'
+    DFTRACER_INC_METADATA: '1'
+unet3d_v100_21_4_compress_output:
+  stage: compress_output
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_pgzip;
+  - flux run -N 4 --tasks-per-node=1 -q lqueue -t 1 --exclusive dftracer_pgzip -d
+    /tmp/unet3d_v100/4/20250326122657/train
+  - if find /tmp/unet3d_v100/4/20250326122657/train -type f -name '*.pfw' | grep -q
+    .; then echo 'Uncompressed .pfw files found!'; exit 1; fi
+  - if ! find /tmp/unet3d_v100/4/20250326122657/train -type f -name '*.pfw.gz' | grep
+    -q .; then echo 'No compressed .pfw.gz files found!'; exit 1; fi
+  needs:
+  - unet3d_v100_21_4_train
+unet3d_v100_21_4_move:
+  stage: move
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - mkdir -p /tmp/v1.0.10.dev72/system/unet3d_v100/nodes-4/20250326122657/RAW/
+  - mv /tmp/unet3d_v100/4/20250326122657/train/*.pfw.gz /tmp/v1.0.10.dev72/system/unet3d_v100/nodes-4/20250326122657/RAW/
+  - mv /tmp/unet3d_v100/4/20250326122657/train/.hydra /tmp/v1.0.10.dev72/system/unet3d_v100/nodes-4/20250326122657/
+  - mv /tmp/unet3d_v100/4/20250326122657/train/dlio.log /tmp/v1.0.10.dev72/system/unet3d_v100/nodes-4/20250326122657/
+  needs:
+  - create_directory_common
+unet3d_v100_21_4_compact:
+  stage: compact
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - which python; which dftracer_split;
+  - cd /tmp/v1.0.10.dev72/system/unet3d_v100/nodes-4/20250326122657
+  - dftracer_split -d $PWD/RAW -o $PWD/COMPACT -s 1024 -n unet3d_v100
+  - if ! find $PWD/COMPACT -type f -name '*.pfw.gz' | grep -q .; then echo 'No compacted
+    .pfw.gz files found!'; exit 1; fi
+  needs:
+  - unet3d_v100_21_4_move
+unet3d_v100_21_4_compress_final:
+  stage: compress_final
+  extends: .system
+  script:
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - cd /tmp/v1.0.10.dev72/system/unet3d_v100/nodes-4/20250326122657
+  - tar -czf RAW.tar.gz RAW
+  - tar -czf COMPACT.tar.gz COMPACT
+  needs:
+  - unet3d_v100_21_4_compact
+unet3d_v100_21_4_cleanup:
+  stage: cleanup
+  extends: .system
+  script:
+  - module load mpifileutils
+  - flux run -N 4 --tasks-per-node=1 -q lqueue -t 1 --exclusive drm /tmp/unet3d_v100/4/20250326122657
+  needs:
+    job: unet3d_v100_21_4_compress_final
+    optional: true
+create_directory_common:
+  stage: create_directory
+  extends: .system
+  script:
+  - ls
+  - source .gitlab/scripts/variables.sh
+  - source .gitlab/scripts/pre.sh
+  - ./.gitlab/scripts/create_log_dir.sh
+  needs:
+  - job: bert_v100_1_8_compress_output
+    optional: true
+  - job: bert_v100_1_16_compress_output
+    optional: true
+  - job: bert_v100_1_32_compress_output
+    optional: true
+  - job: cosmoflow_a100_2_8_compress_output
+    optional: true
+  - job: cosmoflow_a100_2_16_compress_output
+    optional: true
+  - job: cosmoflow_a100_2_32_compress_output
+    optional: true
+  - job: cosmoflow_h100_3_8_compress_output
+    optional: true
+  - job: cosmoflow_h100_3_16_compress_output
+    optional: true
+  - job: cosmoflow_h100_3_32_compress_output
+    optional: true
+  - job: cosmoflow_v100_4_8_compress_output
+    optional: true
+  - job: cosmoflow_v100_4_16_compress_output
+    optional: true
+  - job: cosmoflow_v100_4_32_compress_output
+    optional: true
+  - job: dlrm_6_8_compress_output
+    optional: true
+  - job: dlrm_6_16_compress_output
+    optional: true
+  - job: dlrm_6_32_compress_output
+    optional: true
+  - job: llama_70b_9_32_compress_output
+    optional: true
+  - job: llama_70b_zero3_10_8_compress_output
+    optional: true
+  - job: llama_70b_zero3_10_16_compress_output
+    optional: true
+  - job: llama_70b_zero3_10_32_compress_output
+    optional: true
+  - job: llama_7b_11_8_compress_output
+    optional: true
+  - job: llama_7b_11_16_compress_output
+    optional: true
+  - job: llama_7b_11_32_compress_output
+    optional: true
+  - job: llama_7b_zero3_12_8_compress_output
+    optional: true
+  - job: llama_7b_zero3_12_16_compress_output
+    optional: true
+  - job: llama_7b_zero3_12_32_compress_output
+    optional: true
+  - job: llama_8b_zero3_13_8_compress_output
+    optional: true
+  - job: llama_8b_zero3_13_16_compress_output
+    optional: true
+  - job: llama_8b_zero3_13_32_compress_output
+    optional: true
+  - job: megatron_deepspeed_LLNL_14_32_compress_output
+    optional: true
+  - job: resnet50_a100_15_8_compress_output
+    optional: true
+  - job: resnet50_a100_15_16_compress_output
+    optional: true
+  - job: resnet50_a100_15_32_compress_output
+    optional: true
+  - job: resnet50_h100_16_8_compress_output
+    optional: true
+  - job: resnet50_h100_16_16_compress_output
+    optional: true
+  - job: resnet50_h100_16_32_compress_output
+    optional: true
+  - job: resnet50_tf_17_8_compress_output
+    optional: true
+  - job: resnet50_tf_17_16_compress_output
+    optional: true
+  - job: resnet50_tf_17_32_compress_output
+    optional: true
+  - job: resnet50_v100_18_8_compress_output
+    optional: true
+  - job: resnet50_v100_18_16_compress_output
+    optional: true
+  - job: resnet50_v100_18_32_compress_output
+    optional: true
+  - job: unet3d_a100_19_2_compress_output
+    optional: true
+  - job: unet3d_h100_20_2_compress_output
+    optional: true
+  - job: unet3d_v100_21_4_compress_output
+    optional: true

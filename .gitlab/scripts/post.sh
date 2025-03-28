@@ -29,7 +29,7 @@ else
 fi
 
 cd $LFS_DIR || { echo "Failed to change directory to $LFS_DIR"; exit 1; }
-
+index=0
 for workload in "${DLIO_WORKLOADS[@]}"; do
     output=$CUSTOM_CI_OUTPUR_DIR/$workload/$CI_RUNNER_SHORT_TOKEN/train
     num_trace_files=$(find $output -name *.pfw.gz | wc -l)
@@ -40,35 +40,36 @@ for workload in "${DLIO_WORKLOADS[@]}"; do
     echo "Copying trace files for workload $workload"
     workload_dir=$(echo $workload | sed 's/_/\//g') || { echo "Failed to process workload directory"; exit 1; }
     echo "workload_dir is $workload_dir"
-    mkdir -p $workload_dir/node-$NODES/ || { echo "Failed to create directory $workload_dir/node-$NODES/"; exit 1; }
-    current_versions=$(find $workload_dir/node-$NODES/ -name v* | wc -l) || { echo "Failed to find current versions"; exit 1; }
+    mkdir -p $workload_dir/node-${WORKLOAD_NODES[$index]}/ || { echo "Failed to create directory $workload_dir/node-${WORKLOAD_NODES[$index]}/"; exit 1; }
+    current_versions=$(find $workload_dir/node-${WORKLOAD_NODES[$index]}/ -name v* | wc -l) || { echo "Failed to find current versions"; exit 1; }
     current_version=$((current_versions + 1))
-    mkdir -p $workload_dir/node-$NODES/v${current_version}/RAW || { echo "Failed to create RAW directory"; exit 1; }
-    cmd="mv $output/*.pfw.gz $workload_dir/node-$NODES/v${current_version}/RAW/"
+    mkdir -p $workload_dir/node-${WORKLOAD_NODES[$index]}/v${current_version}/RAW || { echo "Failed to create RAW directory"; exit 1; }
+    cmd="mv $output/*.pfw.gz $workload_dir/node-${WORKLOAD_NODES[$index]}/v${current_version}/RAW/"
     echo $cmd
     $cmd || { echo "Failed to move trace files"; exit 1; }
 
-    cmd="mv $output/.hydra $workload_dir/node-$NODES/v${current_version}/"
+    cmd="mv $output/.hydra $workload_dir/node-${WORKLOAD_NODES[$index]}/v${current_version}/"
     echo $cmd
     $cmd || { echo "Failed to move .hydra folder"; exit 1; }
     
-    cd $workload_dir/node-$NODES/v${current_version} || { echo "Failed to change directory to $workload_dir/node-$NODES/v${current_version}"; exit 1; }
+    cd $workload_dir/node-${WORKLOAD_NODES[$index]}/v${current_version}/ || { echo "Failed to change directory to $workload_dir/node-${WORKLOAD_NODES[$index]}/v${current_version}"; exit 1; }
     
-    echo "Compacting $(ls RAW/*.pfw.gz 2>/dev/null | wc -l) dftracer files"
-    cmd="dftracer_split -d $PWD/RAW/ -o $PWD/COMPACT/ -s 1024 -n $workload"
-    echo "Generated command: $cmd"
-    $cmd || { echo "Failed to compact dftracer files"; exit 1; }
 
-    cmd="tar -cvf RAW.tar.gz RAW"
-    echo "Generated command: $cmd"
-    $cmd || { echo "Failed to create RAW.tar.gz"; exit 1; }
+    index=$((index + 1))
+    # echo "Compacting $(ls *.pfw.gz 2>/dev/null | wc -l) dftracer files"
+    # cmd="dftracer_split -d $PWD/RAW -o $PWD/COMPACT/ -s 1024 -n $workload"
+    # echo "Generated command: $cmd"
+    # $cmd || { echo "Failed to compact dftracer files"; exit 1; }
+
+    # cmd="tar -cvf RAW.tar.gz RAW"
+    # echo "Generated command: $cmd"
+    # $cmd || { echo "Failed to create RAW.tar.gz"; exit 1; }
     
-    cmd="tar -cvf COMPACT.tar.gz COMPACT"
-    echo "Generated command: $cmd"
-    $cmd || { echo "Failed to create COMPACT.tar.gz"; exit 1; }
+    # cmd="tar -cvf COMPACT.tar.gz COMPACT"
+    # echo "Generated command: $cmd"
+    # $cmd || { echo "Failed to create COMPACT.tar.gz"; exit 1; }
 
-    cd - || { echo "Failed to return to previous directory"; exit 1; }
-
+    cd - || { echo "Failed to return to previous directory";continue; }
 done
 
 cd - || { echo "Failed to return to previous directory"; exit 1; }
