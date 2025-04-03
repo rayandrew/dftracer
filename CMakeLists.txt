@@ -228,94 +228,103 @@ endif ()
 
 include(FetchContent)
 set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/.cmake_cache")
-
-# Download only Perfetto source files
-FetchContent_Declare(
-    Perfetto
-    GIT_REPOSITORY https://github.com/google/perfetto.git
-    GIT_TAG main  # Optionally, use a specific commit or tag for reproducibility
-    SOURCE_DIR ${FETCHCONTENT_BASE_DIR}/perfetto
-)
-
-FetchContent_MakeAvailable(Perfetto)
-
-# Protobuf generation paths
 set(PROTOBUF_SRC_DIR ${FETCHCONTENT_BASE_DIR}/perfetto/protos)
 
-# Define protobuf files to be compiled
-# set(PROTO_FILES
-#     ${PROTOBUF_SRC_DIR}/perfetto/trace/trace.proto
-#     ${PROTOBUF_SRC_DIR}/perfetto/trace/track_event/track_event.proto
-# )
+if(NOT EXISTS "${FETCHCONTENT_BASE_DIR}/perfetto/meson.build")
+    message(STATUS "Perfetto not found in cache. Downloading...")
+    include(FetchContent)
+    FetchContent_Declare(
+        Perfetto
+        GIT_REPOSITORY https://github.com/google/perfetto.git
+        GIT_TAG main
+        SOURCE_DIR ${PERFETTO_SOURCE_DIR}
+    )
+    FetchContent_MakeAvailable(Perfetto)
+else()
+    message(STATUS "Using cached Perfetto at ${PERFETTO_SOURCE_DIR}")
+endif()
 
-# Find Protobuf package
+# Protobuf generation paths
+
+find_program(PROTOC_EXECUTABLE protoc)
+if(NOT PROTOC_EXECUTABLE)
+    message(FATAL_ERROR "protoc not found on the system PATH. Make sure Protobuf is installed.")
+else()
+    message(STATUS "Using protoc: ${PROTOC_EXECUTABLE}")
+endif()
+
+message(STATUS "Using protoc: ${PROTOC_EXECUTABLE}")
+
 find_package(Protobuf REQUIRED)
 include_directories(${PROTOBUF_INCLUDE_DIRS})
 include_directories(${PROTOBUF_BINARY_DIR})
 
-set(GENERATED_PROTO_DIR ${CMAKE_BINARY_DIR}/generated)
-file(MAKE_DIRECTORY ${GENERATED_PROTO_DIR})
+set(PROTO_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated)
+file(MAKE_DIRECTORY ${PROTO_GENERATED_DIR})
 file(GLOB_RECURSE ALL_PROTO_FILES "${PROTOBUF_SRC_DIR}/*.proto")
 
-set(PROTO_DIRS "")
+set(PROTO_GENERATED_SRCS "")
+set(PROTO_GENERATED_HEADERS "")
+
+function(string_contains_any out_var input_string substrings)
+    set(found FALSE)
+    foreach(substring ${substrings})  # <- don't use IN LISTS for arguments passed directly
+        string(FIND "${input_string}" "${substring}" pos)
+        if(NOT pos EQUAL -1)
+            set(found TRUE)
+            break()
+        endif()
+    endforeach()
+    set(${out_var} ${found} PARENT_SCOPE)
+endfunction()
+
+set(IGNORE_PERFETTO_PROTOBUFS "bigtrace" "ipc" "metrics" "third_party" "trace_processor" "trace_summary" "sql")
+
 foreach(PROTO_FILE ${ALL_PROTO_FILES})
-    get_filename_component(PROTO_DIR ${PROTO_FILE} DIRECTORY)
-    list(FIND PROTO_DIRS ${PROTO_DIR} DIR_INDEX)
-    if(DIR_INDEX EQUAL -1)
-        list(APPEND PROTO_DIRS ${PROTO_DIR})
-    endif()
-endforeach()
-
-set(PROTO_SRCS "")
-set(PROTO_HDRS "")
-foreach(PROTO_DIR ${PROTO_DIRS})
-    file(GLOB PROTO_FILES_IN_DIR "${PROTO_DIR}/*.proto")
+    # Get the relative path of the .proto file
+    file(RELATIVE_PATH REL_PROTO_PATH ${PROTOBUF_SRC_DIR} ${PROTO_FILE})
     
-     if (PROTO_FILES_IN_DIR)
-        protobuf_generate_cpp(
-            PROTO_SRCS PROTO_HDRS
-            PROTOC_OUT_DIR ${GENERATED_PROTO_DIR}
-            ${PROTO_FILES_IN_DIR}
-        )
-        list(APPEND PROTO_SRCS ${PROTO_SRCS_DIR})
-        list(APPEND PROTO_HDRS ${PROTO_HDRS_DIR})
+    # Create the corresponding directory inside PROTO_GENERATED_DIR
+    get_filename_component(REL_PROTO_DIR ${REL_PROTO_PATH} DIRECTORY)
+
+    
+    string_contains_any(contains_ignore "${REL_PROTO_DIR}" "${IGNORE_PERFETTO_PROTOBUFS}")
+
+    # MESSAGE(FATAL_ERROR "here ${REL_PROTO_DIR} ${contains_ignore}")
+    if(contains_ignore)
+
+        # MESSAGE(FATAL_ERROR "here ${REL_PROTO_DIR}")
+        continue()
     endif()
+    
+    file(MAKE_DIRECTORY "${PROTO_GENERATED_DIR}/protos/${REL_PROTO_DIR}")
 
+    # Define the generated files
+    get_filename_component(PROTO_NAME_WE ${PROTO_FILE} NAME_WE)
+    set(PROTO_HEADER "${PROTO_GENERATED_DIR}/protos/${REL_PROTO_DIR}/${PROTO_NAME_WE}.pb.h")
+    set(PROTO_SRC "${PROTO_GENERATED_DIR}/protos/${REL_PROTO_DIR}/${PROTO_NAME_WE}.pb.cc")
+    
+    list(APPEND PROTO_GENERATED_SRCS ${PROTO_SRC})
+    list(APPEND PROTO_GENERATED_HEADERS ${PROTO_HEADER})
 
+    add_custom_command(
+        OUTPUT ${PROTO_HEADER} ${PROTO_SRC}
+        COMMAND ${PROTOC_EXECUTABLE}
+            --proto_path=${FETCHCONTENT_BASE_DIR}/perfetto  # Include base Perfetto directory for absolute imports
+            --cpp_out=${PROTO_GENERATED_DIR}
+            ${PROTO_FILE}
+        # COMMAND ${CMAKE_COMMAND} -E echo "Generated ${PROTO_HEADER} and ${PROTO_SRC}"
+        DEPENDS ${PROTO_FILE}
+        COMMENT "Generating ${PROTO_HEADER} and ${PROTO_SRC}"
+        VERBATIM
+    )
 endforeach()
 
-
-# Generate Protobuf files
-include_directories(${Protobuf_INCLUDE_DIRS})
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-# protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES} PROTOC_OUT_DIR ${GENERATED_PROTO_DIR})
-
-
-# # Create the protobuf binary directory
-# file(MAKE_DIRECTORY ${PROTOBUF_BINARY_DIR})
-# 
-# # Define protobuf files to be compiled
-# set(PROTO_FILES
-#     ${PROTOBUF_SRC_DIR}/perfetto/trace/trace.proto
-#     ${PROTOBUF_SRC_DIR}/perfetto/trace/track_event/track_event.proto
-# )
-# 
-# find_package(Protobuf REQUIRED)
-# include_directories(${Protobuf_INCLUDE_DIRS})
-# include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-# 
-# set(PROTO_FILES
-#     ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/trace.proto
-# )
-# set(GENERATED_PROTO_DIR ${CMAKE_BINARY_DIR}/generated)
-# file(MAKE_DIRECTORY ${GENERATED_PROTO_DIR})
-# include_directories(${GENERATED_PROTO_DIR})
-# protobuf_generate_cpp(
-#     PROTO_SRCS PROTO_HDRS
-#     ${PROTO_FILES}
-#     PROTOC_OUT_DIR ${GENERATED_PROTO_DIR}
-# )
-
+# Define a target for generating Protobuf files
+add_custom_target(GeneratePerfettoProtos ALL
+    DEPENDS ${PROTO_GENERATED_SRCS}
+    COMMENT "Generating all Perfetto Protobuf files..."
+)
 
 if (DFTRACER_BUILD_PYTHON_BINDINGS)
     find_package(pybind11 REQUIRED)
@@ -340,12 +349,13 @@ if (NOT DFTRACER_DISABLE_HWLOC)
         set(DEPENDENCY_LIB ${DEPENDENCY_LIB} ${HWLOC_LIBRARIES})
         message(STATUS "[DFTRACER] found hwloc at ${HWLOC_INCLUDE_DIRS}")
     else ()
-        message(FATAL_ERROR "-- [DFTRACER] hwloc is needed for ${PROJECT_NAME} build with -DDFTRACER_DISABLE_HWLOC-ON option.")
+        message(FATAL_ERROR "-- [DFTRACER] hwloc is needed for ${PROJECT_NAME} build with -DDFTRACER_DISABLE_HWLOC=ON option.")
     endif ()
 endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${PROTO_GENERATED_DIR})
 set(DFTRACER_PRELOAD_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/dftracer_preload.cpp)
 set(DFTRACER_PRELOAD_PRIVATE_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/dftracer_preload.h)
 
@@ -360,7 +370,7 @@ set(DFTRACER_CORE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/brahma/posix.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/md5.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/df_logger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/utils.cpp
-        ${PROTO_SRCS})
+        ${PROTO_GENERATED_SRCS})
 set(DFTRACER_CORE_PUBLIC_INCLUDE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dftracer/dftracer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/dftracer/core/constants.h
@@ -375,8 +385,11 @@ set(DFTRACER_CORE_PRIVATE_INCLUDE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/core/dftracer_main.h
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/core/logging.h
         ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/core/singleton.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/configuration_manager.h)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/dftracer/utils/configuration_manager.h
+        ${PROTOBUF_INCLUDE_DIRS}
+        ${PROTO_GENERATED_DIR})
 add_library(${PROJECT_NAME} SHARED)
+add_dependencies(${PROJECT_NAME} GeneratePerfettoProtos)
 target_compile_definitions(${PROJECT_NAME} PUBLIC DFTRACER_LOGGER_LEVEL_ERROR)
 target_link_libraries(${PROJECT_NAME} ${DEPENDENCY_LIB} ${Protobuf_LIBRARIES})
 add_library(${PROJECT_NAME}_dbg SHARED)
@@ -418,16 +431,26 @@ target_include_directories(${PROJECT_NAME}
         PRIVATE
         # where the library itself will look for its internal headers
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${PROTO_GENERATED_DIR}
+        # ${PROTO_GENERATED_DIR}/protos
         PUBLIC
         # where top-level project will look for the library's public headers
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         # where external projects will look for the library's public headers
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
         )
+
+# get_target_property(includes MyTarget INCLUDE_DIRECTORIES)
+# message(STATUS "Include directories for ${PROJECT_NAME}: ${includes}")
+# get_target_property(includes ${PROJECT_NAME} INTERFACE_INCLUDE_DIRECTORIES)
+# message(FATAL_ERROR "Interface include dirs for ${PROJECT_NAME}: ${includes}")
+
 target_include_directories(${PROJECT_NAME}_dbg
         PRIVATE
         # where the library itself will look for its internal headers
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        # ${PROTO_GENERATED_DIR}/protos
+        ${PROTO_GENERATED_DIR}
         PUBLIC
         # where top-level project will look for the library's public headers
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

@@ -6,12 +6,13 @@
 #define DFTRACER_CHROME_WRITER_H
 
 #include <assert.h>
+#include <unistd.h>
 #include <dftracer/core/constants.h>
 #include <dftracer/core/typedef.h>
 #include <dftracer/utils/configuration_manager.h>
 #include <dftracer/utils/posix_internal.h>
 #include <dftracer/utils/utils.h>
-#include <unistd.h>
+#include <protos/perfetto/trace/trace.pb.h>
 
 #include <any>
 #include <atomic>
