@@ -20,11 +20,12 @@ void set_init(bool _init) { dftracer::init = _init; }
 void dftracer_init(void) {
   auto conf =
       dftracer::Singleton<dftracer::ConfigurationManager>::get_instance();
-  DFTRACER_LOG_DEBUG("dftracer_init", "");
-  if (!is_init()) {
-    dftracer::Singleton<dftracer::DFTracerCore>::get_instance(
-        ProfilerStage::PROFILER_INIT, ProfileType::PROFILER_PRELOAD);
-    set_init(true);
+  if (conf != nullptr) {
+    DFTRACER_LOG_DEBUG("dftracer_init", "");
+    if (conf->init_type == PROFILER_INIT_LD_PRELOAD) {
+      dftracer::Singleton<dftracer::DFTracerCore>::get_instance(
+          ProfilerStage::PROFILER_INIT, ProfileType::PROFILER_PRELOAD);
+    }
   }
 }
 
@@ -32,13 +33,10 @@ void dftracer_fini(void) {
   auto conf =
       dftracer::Singleton<dftracer::ConfigurationManager>::get_instance();
   DFTRACER_LOG_DEBUG("dftracer_fini", "");
-  if (is_init()) {
-    auto dftracer_inst =
-        dftracer::Singleton<dftracer::DFTracerCore>::get_instance(
-            ProfilerStage::PROFILER_FINI, ProfileType::PROFILER_PRELOAD);
-    if (dftracer_inst != nullptr) {
-      dftracer_inst->finalize();
-    }
-    set_init(false);
+  auto dftracer_inst =
+      dftracer::Singleton<dftracer::DFTracerCore>::get_instance(
+          ProfilerStage::PROFILER_FINI, ProfileType::PROFILER_PRELOAD);
+  if (dftracer_inst != nullptr) {
+    dftracer_inst->finalize();
   }
 }

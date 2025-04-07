@@ -11,17 +11,17 @@ endfunction()
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(test_cpp cpp/test.cpp)
-target_link_libraries(test_cpp ${PROJECT_NAME})
-add_dependencies(test_cpp ${PROJECT_NAME})
-add_dependencies(test_cpp ${PROJECT_NAME}_preload)
+target_link_libraries(test_cpp ${PROJECT_NAME}_dbg)
+add_dependencies(test_cpp ${PROJECT_NAME}_dbg)
+add_dependencies(test_cpp ${PROJECT_NAME}_preload_dbg)
 
 add_library(testlib SHARED c/testlib.c)
 target_compile_options(testlib PRIVATE ${DFTRACER_FUNCTION_FLAGS})
 add_executable(test_c c/test.c)
 target_compile_options(test_c PRIVATE ${DFTRACER_FUNCTION_FLAGS})
-target_link_libraries(test_c ${PROJECT_NAME} testlib)
-add_dependencies(test_c ${PROJECT_NAME})
-add_dependencies(test_c ${PROJECT_NAME}_preload)
+target_link_libraries(test_c ${PROJECT_NAME}_dbg testlib)
+add_dependencies(test_c ${PROJECT_NAME}_dbg)
+add_dependencies(test_c ${PROJECT_NAME}_preload_dbg)
 
 
 function(set_common_properties test_name)

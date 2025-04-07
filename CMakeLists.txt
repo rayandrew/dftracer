@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.4...3.18)
+cmake_minimum_required(VERSION 3.5...3.18)
 #------------------------------------------------------------------------------
 # Version information
 #------------------------------------------------------------------------------
@@ -14,7 +14,7 @@ set(DFTRACER_PACKAGE_VERSION_MINOR "${DFTRACER_VERSION_PATCH}")
 set(DFTRACER_PACKAGE_STRING "${DFTRACER_PACKAGE_NAME} ${DFTRACER_PACKAGE_VERSION}")
 set(DFTRACER_PACKAGE_TARNAME "${DFTRACER_PACKAGE}")
 
-set(DFTRACER_VERSION "(1, 0, 10)")
+set(DFTRACER_VERSION "(1, 0, 11)")
 
 project(dftracer LANGUAGES C CXX)
 
@@ -414,10 +414,12 @@ endif()
 target_sources(${PROJECT_NAME}
         PRIVATE
         ${DFTRACER_CORE_SRC}
+        ${DFTRACER_PRELOAD_SRC}
         )
 target_sources(${PROJECT_NAME}_dbg
         PRIVATE
         ${DFTRACER_CORE_SRC}
+        ${DFTRACER_PRELOAD_SRC}
         )
 target_sources(${PROJECT_NAME}_preload
         PRIVATE

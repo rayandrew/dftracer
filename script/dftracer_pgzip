@@ -9,85 +9,84 @@
 #   -d input_directory      specify input directories. should contain .pfw or .pfw.gz files.
 
 date_echo() {
-    dt=$(date '+%d/%m/%Y %H:%M:%S');
-    echo "$dt  $@"
+  dt=$(date '+%d/%m/%Y %H:%M:%S');
+  echo "$dt  $*"
 }
 
 progress_date_echo() {
-    dt=$(date '+%d/%m/%Y %H:%M:%S')
-    echo -ne "$dt  $@"\\r
+  dt=$(date '+%d/%m/%Y %H:%M:%S')
+  echo -ne "$dt  $*"\\r
 }
 
 LOG_DIR=$PWD
 
-PPWD=$PWD
-
 function usage {
-    echo "usage: $(basename $0) [-v] [-d input_directory]"
-    echo "  -v                      enable verbose mode"
-    echo "  -h                      display help"
-    echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
-    exit 1
+  echo "usage: $(basename "$0") [-v] [-d input_directory]"
+  echo "  -v                      enable verbose mode"
+  echo "  -h                      display help"
+  echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
+  exit 1
 }
 while getopts ':cvfd:h' opt; do
   case "$opt" in
-    d)
-      LOG_DIR="${OPTARG}"
-      ;;
-    v)
-      set -x
-      ;;
-    h)
-      usage
-      exit 0
-      ;;
+  d)
+    LOG_DIR="${OPTARG}"
+    ;;
+  v)
+    set -x
+    ;;
+  h)
+    usage
+    ;;
 
-    :)
-      echo -e "option requires an argument.\n"
-      usage
-      exit 1
-      ;;
+  :)
+    echo -e "option requires an argument.\n"
+    usage
+    ;;
 
-    ?)
-      echo -e "Invalid command option.\n"
-      usage
-      exit 1
-      ;;
+  ?)
+    echo -e "Invalid command option.\n"
+    usage
+    ;;
   esac
 done
-shift "$(($OPTIND -1))"
-total=0
-for file in *.pfw; do total=1; break; done
+LOG_DIR=$(realpath "$LOG_DIR")
 
-# pfw_count=$(ls -1 $LOG_DIR/*.pfw 2> /dev/null | wc -l)
-# gz_count=$(ls -1 $LOG_DIR/*.gz 2> /dev/null | wc -l)
-# total=$((pfw_count + gz_count))
-if [ $total == 0 ]; then
-    date_echo "The folder does not contain any pfw files."
-    exit 1
+shift "$(($OPTIND -1))"
+total=$(find "$LOG_DIR" -maxdepth 1 -type f -name "*.pfw" | wc -l)
+
+if [ "$total" == "0" ]; then
+  date_echo "The folder does not contain any pfw files."
+  exit 1
 fi
-pushd $LOG_DIR > /dev/null
+date_echo "Found $total .pfw files to process."
+pushd $LOG_DIR > /dev/null || return
 JOBS_LIMIT=$(nproc --all)
 files=("$LOG_DIR"/*.pfw)
 total=${#files[@]}
+processed=0
+
 # loop over logs
 for file_index in "${!files[@]}"; do
   file=${files[$file_index]}
   running_jobs=$(jobs -rp | wc -l)
   if [ $running_jobs -ge $JOBS_LIMIT ]; then
-    date_echo "waiting for Running $running_jobs jobs to be less than $JOBS_LIMIT"
-    while [ $running_jobs -ge $JOBS_LIMIT ]
-    do
-        sleep 1
-        running_jobs=$(jobs -rp | wc -l)
-    done
-    date_echo "Running $running_jobs jobs are now less than $JOBS_LIMIT"
+  date_echo "Waiting for running jobs to be less than $JOBS_LIMIT. Current: $running_jobs"
+  while [ $running_jobs -ge $JOBS_LIMIT ]
+  do
+    sleep 1
+    running_jobs=$(jobs -rp | wc -l)
+  done
+  date_echo "Running jobs are now less than $JOBS_LIMIT. Current: $running_jobs"
   fi
   {
-    gzip $file
+  gzip "$file" && {
+    ((processed++))
+    progress_date_echo "Processed $processed/$total files."
+  }
   } &
 done
-popd > /dev/null
+popd > /dev/null || return
 wait
 echo ""
-date_echo Gzip Completed
+date_echo "Gzip Completed. Processed $processed/$total files."

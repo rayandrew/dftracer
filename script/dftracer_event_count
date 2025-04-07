@@ -9,18 +9,18 @@
 #   -h                      display help
 date_echo() {
     dt=$(date '+%d/%m/%Y %H:%M:%S')
-    echo "$dt  $@"
+    echo "$dt  $*"
 }
 
 progress_date_echo() {
     dt=$(date '+%d/%m/%Y %H:%M:%S')
-    echo -ne "$dt  $@                              "\\r
+    echo -ne "$dt  $@*                             "\\r
 }
 LOG_DIR=$PWD
 run_create_index=1
 
 function usage {
-    echo "usage: $(basename $0) [-f] [-d input_directory]"
+    echo "usage: $(basename "$0") [-f] [-d input_directory]"
     echo "  -h                      display help"
     echo "  -f                      force index creation"
     echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
@@ -36,21 +36,21 @@ while getopts ':fd:h' opt; do
       ;;
     h)
       usage
-      exit 0
       ;;
     :)
       echo -e "option requires an argument.\n"
       usage
-      exit 1
       ;;
 
     ?)
       echo -e "Invalid command option.\n"
       usage
-      exit 1
       ;;
   esac
 done
+
+LOG_DIR=$(realpath "$LOG_DIR")
+
 shift "$(($OPTIND -1))"
 
 function get_lines_count {
@@ -61,7 +61,7 @@ function get_lines_count {
     dir=$PWD
   fi
 
-  pushd $dir > /dev/null
+  pushd $dir > /dev/null || return
 
   # check if sqlite3 exists
   sqlite_exists=0
@@ -73,6 +73,7 @@ function get_lines_count {
   files=("$dir"/*.zindex)
   JOBS_LIMIT=$(nproc --all)
   declare -A lines_counts
+  total=${#files[@]}
   # for i in $(seq 1 $JOBS_LIMIT); do
   #   lines_counts+=("0")
   # done
@@ -94,7 +95,7 @@ function get_lines_count {
       lines_counts[$file_index]=$(
       {
         sqlite3 "$file_name" "select count(line) as a from LineOffsets where length > 8;"
-        progress_date_echo "Finished counting $file_index" >&2
+        progress_date_echo "Finished counting $file_index of $total" >&2
       } &)
     else
       lines_counts[$file_index]=$(
@@ -105,7 +106,7 @@ import glob
 import sqlite3
 
 conn = sqlite3.connect("${file_name}")
-res = conn.execute("select count(line) as a from LineOffsets where length > 8;")
+res = conn.execute("select max(line) as a from LineOffsets where length > 8;")
 lines_count = res.fetchone()[0]
 print(lines_count)
 EOF
@@ -114,7 +115,7 @@ EOF
   done
   wait
 
-  popd > /dev/null
+  popd > /dev/null || return
 
   lines_count=0
   for line_count in "${lines_counts[@]}"; do
@@ -125,7 +126,7 @@ EOF
 }
 
 files=("$LOG_DIR"/*.pfw.gz)
-for file in $files; do
+for file in "${files[@]}"; do
   if [ ! -f "$file.zindex" ]; then
     run_create_index=1
     break
@@ -134,7 +135,7 @@ done
 
 if [ "$run_create_index" == "1" ]; then
   SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-  $SCRIPT_DIR/dftracer_create_index -f -d $LOG_DIR -f >/dev/null
+  "$SCRIPT_DIR"/dftracer_create_index -f -d "$LOG_DIR" -f >/dev/null
 fi
 
-get_lines_count $LOG_DIR
+get_lines_count "$LOG_DIR"

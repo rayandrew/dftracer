@@ -33,7 +33,7 @@ class ChromeWriter {
 
  private:
   bool include_metadata, enable_compression;
-
+  bool init;
   bool enable_core_affinity;
 
   FILE *fh;
@@ -83,6 +83,7 @@ class ChromeWriter {
         filename(),
         include_metadata(false),
         enable_compression(false),
+        init(false),
         enable_core_affinity(false),
         fh(nullptr),
         current_index(0),

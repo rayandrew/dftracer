@@ -135,6 +135,8 @@ bool dftracer::DFTracerCore::finalize() {
     }
     this->is_initialized = false;
     return true;
+  } else {
+    DFTRACER_LOG_INFO("Already finalized on pid %d", this->process_id);
   }
   return false;
 }
@@ -165,7 +167,6 @@ void dftracer::DFTracerCore::initialize(bool _bind, const char *_log_file,
         ssize_t read_bytes = df_read(fd, exec_cmd, DFT_PATH_MAX);
         df_close(fd);
         ssize_t index = 0;
-        size_t parts = 0;
         size_t last_index = 0;
         bool has_extracted = false;
         while (index < read_bytes - 1 && index < DFT_PATH_MAX - 2) {
@@ -181,11 +182,7 @@ void dftracer::DFTracerCore::initialize(bool _bind, const char *_log_file,
             }
             exec_cmd[index] = SEPARATOR;
             last_index = index + 1;
-            parts++;
           }
-          /*if (parts > 1) {
-            exec_cmd[index] = '\0';
-          }*/
           index++;
         }
         if (!has_extracted) {
@@ -236,7 +233,7 @@ void dftracer::DFTracerCore::initialize(bool _bind, const char *_log_file,
               if (!conf->data_dirs.empty()) {
                 this->data_dirs = conf->data_dirs;
               } else {  // GCOV_EXCL_START
-                DFTRACER_LOG_ERROR(DFTRACER_UNDEFINED_DATA_DIR_MSG, "");
+                DFTRACER_LOG_ERROR("%s", DFTRACER_UNDEFINED_DATA_DIR_MSG);
                 throw std::runtime_error(DFTRACER_UNDEFINED_DATA_DIR_CODE);
               }  // GCOV_EXCL_STOP
             } else {

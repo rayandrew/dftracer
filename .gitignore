@@ -107,3 +107,4 @@ devenv.local.nix
 
 # gitlab
 .gitlab/scripts/hydra_log
+.gitlab/scripts/run_dlio_workload_test_ci.yaml

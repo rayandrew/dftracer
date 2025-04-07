@@ -56,7 +56,7 @@ int main(int argc, char *argv[]) {
   waitpid(child_pid, &status, WEXITED);
   fclose(fh);
   if (init) {
-    DFTRACER_C_FINI();
+    // DFTRACER_C_FINI();
   }
   return 0;
 }

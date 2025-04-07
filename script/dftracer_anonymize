@@ -16,129 +16,129 @@ OUTPUT_DIR=$PWD/output
 override=0
 compressed=0
 
-PPWD=$PWD
-
 function usage {
-    echo "usage: $(basename $0) [-fcv] [-d input_directory] [-o output_directory]"
-    echo "  -f                      override output directory"
-    echo "  -c                      compress output file"
-    echo "  -v                      enable verbose mode"
-    echo "  -h                      display help"
-    echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
-    echo "  -o output_directory     specify output directory."
-    exit 1
+  echo "usage: $(basename "$0") [-fcv] [-d input_directory] [-o output_directory]"
+  echo "  -f                      override output directory"
+  echo "  -c                      compress output file"
+  echo "  -v                      enable verbose mode"
+  echo "  -h                      display help"
+  echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
+  echo "  -o output_directory     specify output directory."
+  exit 1
 }
+
+function log {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
 while getopts ':cvfd:o:h' opt; do
   case "$opt" in
-    d)
-      LOG_DIR="${OPTARG}"
-      ;;
-    o)
-      OUTPUT_DIR="${OPTARG}"
-      ;;
-    f)
-      override=1
-      ;;
-    v)
-      set -x
-      ;;
-    c)
-      compressed=1
-      ;;
-    h)
-      usage
-      exit 0
-      ;;
+  d)
+    LOG_DIR="${OPTARG}"
+    ;;
+  o)
+    OUTPUT_DIR="${OPTARG}"
+    ;;
+  f)
+    override=1
+    ;;
+  v)
+    set -x
+    ;;
+  c)
+    compressed=1
+    ;;
+  h)
+    usage
+    ;;
 
-    :)
-      echo -e "option requires an argument.\n"
-      usage
-      exit 1
-      ;;
+  :)
+    echo -e "option requires an argument.\n"
+    usage
+    ;;
 
-    ?)
-      echo -e "Invalid command option.\n"
-      usage
-      exit 1
-      ;;
+  ?)
+    echo -e "Invalid command option.\n"
+    usage
+    ;;
   esac
 done
+
+LOG_DIR=$(realpath "$LOG_DIR")
+OUTPUT_DIR=$(realpath "$OUTPUT_DIR")
+
 shift "$(($OPTIND -1))"
 
-mkdir -p ${OUTPUT_DIR}
+log "Creating output directory: ${OUTPUT_DIR}"
+mkdir -p "${OUTPUT_DIR}"
 
 if [ -n "$( ls -A "${OUTPUT_DIR}" )" ] && [ $override -eq 0 ]; then
-  echo "The directory is not empty. Please pass a clean directory or pass -f flag."
+  log "The directory is not empty. Please pass a clean directory or pass -f flag."
   exit 0
 fi
 
-echo "Setting up output directory"
-rm -rf ${OUTPUT_DIR}
-mkdir -p ${OUTPUT_DIR}
+log "Setting up output directory"
+rm -rf "${OUTPUT_DIR}"
+mkdir -p "${OUTPUT_DIR}"
 
 total=0
 for file in *.pfw*; do total=1; break; done
 if [ $total == 0 ]; then
-    echo "The folder does not contain any pfw or pfw.gz files."
-    exit 0
+  log "The folder does not contain any pfw or pfw.gz files."
+  exit 0
 fi
 
 files=("$LOG_DIR"/*.pfw*)
 total=${#files[@]}
+log "Found $total files to process."
 JOBS_LIMIT=64
+
 # loop over logs
 for file_index in "${!files[@]}"; do
   file=${files[$file_index]}
   running_jobs=$(jobs -rp | wc -l)
   if [ $running_jobs -ge $JOBS_LIMIT ]; then
-    date_echo "waiting for Running $running_jobs jobs to be less than $JOBS_LIMIT"
-    while [ $running_jobs -ge $JOBS_LIMIT ]
-    do        
-        sleep 1
-        running_jobs=$(jobs -rp | wc -l)
-    done
-    date_echo "Running $running_jobs jobs are now less than $JOBS_LIMIT"
+  log "Waiting for running jobs to be less than $JOBS_LIMIT. Current: $running_jobs"
+  while [ $running_jobs -ge $JOBS_LIMIT ]
+  do        
+    sleep 1
+    running_jobs=$(jobs -rp | wc -l)
+  done
+  log "Running jobs are now less than $JOBS_LIMIT. Current: $running_jobs"
   fi
   {
   # only look at files
   if [ -f "$file" ]; then
-    # calculate basename and copy files
-    filename=$(basename -- "$file")
-    ext="${filename##*.}"
-    echo "Extension is $ext"
-    cp $LOG_DIR/$filename $OUTPUT_DIR/.tmp.$filename
-    if [ "$ext" == "gz" ]; then
-      # if file is gz get the name
-      name=${file_index%.pfw.gz}
-      echo "extracted name $name"
-      # replace non utf characters
-      gunzip -c $OUTPUT_DIR/.tmp.$filename | sed -e "s/${USER}/USER/g" > $OUTPUT_DIR/$name.pfw
-      # compress
-      if [ $compressed == 1 ]; then
-        gzip $OUTPUT_DIR/$name.pfw
-        echo "Processed $OUTPUT_DIR/$name.pfw.gz"
-      else
-        echo "Processed $OUTPUT_DIR/$name.pfw"
-      fi
+  filename=$(basename -- "$file")
+  ext="${filename##*.}"
+  log "Processing file: $filename with extension: $ext"
+  cp "$LOG_DIR/$filename" "$OUTPUT_DIR/.tmp.$filename"
+  if [ "$ext" == "gz" ]; then
+    name=${file_index%.pfw.gz}
+    log "Extracted name: $name"
+    gunzip -c "$OUTPUT_DIR/.tmp.$filename" | sed -e "s/${USER}/USER/g" > "$OUTPUT_DIR/$name.pfw"
+    if [ $compressed == 1 ]; then
+    gzip "$OUTPUT_DIR/$name.pfw"
+    log "Processed and compressed: $OUTPUT_DIR/$name.pfw.gz"
     else
-      # if file is pfw get the name
-      name=${file_index%.pfw}
-      echo "extracted name $name"
-      # replace non utf characters
-      cat $OUTPUT_DIR/.tmp.$filename | sed -e "s/${USER}/USER/g" > $OUTPUT_DIR/$name.pfw
-      if [ $compressed == 1 ]; then
-        gzip $OUTPUT_DIR/$name.pfw
-        echo "Processed $OUTPUT_DIR/$name.pfw.gz"
-      else
-        echo "Processed $OUTPUT_DIR/$name.pfw"
-      fi
+    log "Processed: $OUTPUT_DIR/$name.pfw"
     fi
-    # remove temp file
-    rm $OUTPUT_DIR/.tmp.$filename
+  else
+    name=${file_index%.pfw}
+    log "Extracted name: $name"
+    cat "$OUTPUT_DIR/.tmp.$filename" | sed -e "s/${USER}/USER/g" > "$OUTPUT_DIR/$name.pfw"
+    if [ $compressed == 1 ]; then
+    gzip "$OUTPUT_DIR/$name.pfw"
+    log "Processed and compressed: $OUTPUT_DIR/$name.pfw.gz"
+    else
+    log "Processed: $OUTPUT_DIR/$name.pfw"
+    fi
+  fi
+  rm "$OUTPUT_DIR/.tmp.$filename"
   fi
   } &
 done
 
 wait
 
-date_echo Finished anonymization of traces.
+log "Finished anonymization of traces."

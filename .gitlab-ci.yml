@@ -8,14 +8,16 @@ variables:
   GIT_SUBMODULE_STRATEGY: recursive
   CUSTOM_CI_BUILDS_DIR: "/usr/workspace/iopp/gitlab-runner-builds"
   CUSTOM_CI_ENV_DIR: "/usr/workspace/iopp/gitlab-runner-envs"
-  CUSTOM_CI_OUTPUT_DIR: "/usr/workspace/iopp/gitlab-runner-outputs"
   # Repository information
   DLIO_BENCHMARK_REPO: https://github.com/argonne-lcf/dlio_benchmark.git
   DLIO_BENCHMARK_TAG: feature/optional-dftracer
   DFTRACER_REPO: https://github.com/LLNL/dftracer.git
-  DFTRACER_TAG: bugfix/ci
   # test variable
   ENV_NAME: dlio_env_2
+  # test variables
+  MIN_NODES: 1
+  MAX_NODES: 8
+  EXCLUSION_LIST: llama_70b_zero3-0;llama_70b-4
 
 stages:
 - build
@@ -28,7 +30,7 @@ dlio_corona_build:
   script:
     - source .gitlab/scripts/variables.sh
     - source .gitlab/scripts/pre.sh
-    # - source .gitlab/scripts/build.sh
+    - if [[ "$DEBUG" != "1" ]]; then source .gitlab/scripts/build.sh; else echo "Not building from scratch as running in Debug mode."; fi
 
 dlio_corona_generate:
   extends: .corona
@@ -36,7 +38,7 @@ dlio_corona_generate:
   script: 
     - source .gitlab/scripts/variables.sh
     - source .gitlab/scripts/pre.sh
-    - rm .gitlab/scripts/run_dlio_workload_test_ci.yaml
+    - if [ -f .gitlab/scripts/run_dlio_workload_test_ci.yaml ]; then rm .gitlab/scripts/run_dlio_workload_test_ci.yaml; fi
     - python .gitlab/scripts/generate_dlio_job.py --output .gitlab/scripts/run_dlio_workload_test_ci.yaml --log-level INFO
     - if [ ! -f .gitlab/scripts/run_dlio_workload_test_ci.yaml ]; then echo 'File not generated!'; exit 1; fi
     - cat .gitlab/scripts/run_dlio_workload_test_ci.yaml

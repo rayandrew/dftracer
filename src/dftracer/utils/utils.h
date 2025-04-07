@@ -50,10 +50,20 @@ inline void signal_handler(int sig) {  // GCOVR_EXCL_START
   }
 }  // GCOVR_EXCL_STOP
 
-inline void set_signal() {
+inline void signal_handler_simple(int sig) {  // GCOVR_EXCL_START
+  DFTRACER_LOG_DEBUG("signal_handler", "");
+  DFTRACER_LOG_INFO("signal caught %d", sig);
+  dft_finalize();
+  exit(sig);
+}
+
+inline void set_signal(bool debug_symbols = true) {
   DFTRACER_LOG_DEBUG("set_signal", "");
   struct sigaction sa;
-  sa.sa_handler = signal_handler;
+  if (debug_symbols)
+    sa.sa_handler = signal_handler;
+  else
+    sa.sa_handler = signal_handler_simple;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
   sigaction(SIGSEGV, &sa, NULL);

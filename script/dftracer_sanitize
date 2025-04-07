@@ -16,115 +16,123 @@ OUTPUT_DIR=$PWD/output
 override=0
 compressed=0
 
-PPWD=$PWD
-
 function usage {
-    echo "usage: $(basename $0) [-fcv] [-d input_directory] [-o output_directory]"
-    echo "  -f                      override output directory"
-    echo "  -c                      compress output file"
-    echo "  -v                      enable verbose mode"
-    echo "  -h                      display help"
-    echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
-    echo "  -o output_directory     specify output directory."
-    exit 1
+  echo "usage: $(basename "$0") [-fcv] [-d input_directory] [-o output_directory]"
+  echo "  -f                      override output directory"
+  echo "  -c                      compress output file"
+  echo "  -v                      enable verbose mode"
+  echo "  -h                      display help"
+  echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
+  echo "  -o output_directory     specify output directory."
+  exit 1
 }
+
+function log {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
 while getopts ':cvfd:o:h' opt; do
   case "$opt" in
-    d)
-      LOG_DIR="${OPTARG}"
-      ;;
-    o)
-      OUTPUT_DIR="${OPTARG}"
-      ;;
-    f)
-      override=1
-      ;;
-    v)
-      set -x
-      ;;
-    c)
-      compressed=1
-      ;;
-    h)
-      usage
-      exit 0
-      ;;
+  d)
+    LOG_DIR="${OPTARG}"
+    ;;
+  o)
+    OUTPUT_DIR="${OPTARG}"
+    ;;
+  f)
+    override=1
+    ;;
+  v)
+    set -x
+    ;;
+  c)
+    compressed=1
+    ;;
+  h)
+    usage
+    ;;
 
-    :)
-      echo -e "option requires an argument.\n"
-      usage
-      exit 1
-      ;;
+  :)
+    echo -e "option requires an argument.\n"
+    usage
+    ;;
 
-    ?)
-      echo -e "Invalid command option.\n"
-      usage
-      exit 1
-      ;;
+  ?)
+    echo -e "Invalid command option.\n"
+    usage
+    ;;
   esac
 done
+
+LOG_DIR=$(realpath "$LOG_DIR")
+OUTPUT_DIR=$(realpath "$OUTPUT_DIR")
+
 shift "$(($OPTIND -1))"
 
-mkdir -p ${OUTPUT_DIR}
+log "Starting script execution."
+log "Input directory: $LOG_DIR"
+log "Output directory: $OUTPUT_DIR"
 
-if [ -z "$( ls -A '${OUTPUT_DIR}' )" ] && [ $override -eq 0 ]; then
-  echo "The directory is not empty. Please pass a clean directory or pass -f flag."
+mkdir -p "${OUTPUT_DIR}"
+
+output_file_count=$(find "${OUTPUT_DIR}" -type f | wc -l)
+log "Total number of files in output directory: $output_file_count"
+
+if [ "$output_file_count" != "0" ] && [ $override -eq 0 ]; then
+  log "The directory is not empty. Please pass a clean directory or pass -f flag."
   exit 0
 fi
 
-echo "Setting up output directory"
-rm -rf ${OUTPUT_DIR}
-mkdir -p ${OUTPUT_DIR}
+log "Setting up output directory."
+rm -rf "${OUTPUT_DIR}"
+mkdir -p "${OUTPUT_DIR}"
 
-
-pfw_count=`ls -1 $LOG_DIR/*.pfw 2> /dev/null | wc -l`
-gz_count=`ls -1 $LOG_DIR/*.gz 2> /dev/null | wc -l`
+pfw_count=$(find "$LOG_DIR" -maxdepth 1 -name "*.pfw" 2> /dev/null | wc -l)
+gz_count=$(find "$LOG_DIR" -maxdepth 1 -name "*.gz" 2> /dev/null | wc -l)
 total=$((pfw_count + gz_count))
+log "Found $pfw_count .pfw files and $gz_count .gz files in the input directory."
+
 if [ $total == 0 ]; then
-    echo "The folder does not contain any pfw or pfw.gz files."
-    exit 0
+  log "The folder does not contain any .pfw or .pfw.gz files."
+  exit 0
 fi
 
 # loop over logs
 for file in "$LOG_DIR"/*.pfw*; do
   # only look at files
   if [ -f "$file" ]; then
-    # calculate basename and copy files
-    filename=$(basename -- "$file")
-    ext="${filename##*.}"
-    echo "Extension is $ext"
-    cp $LOG_DIR/$filename $OUTPUT_DIR/.tmp.$filename
-    if [ "$ext" == "gz" ]; then
-      # if file is gz get the name
-      name=${filename%.pfw.gz}
-      echo "extracted name $name"
-      echo "[" > $OUTPUT_DIR/$name.pfw
-      # replace non utf characters
-      gunzip -c $OUTPUT_DIR/.tmp.$filename | LC_ALL=C sed 's/[^[:print:]\r\t]//g' | jq -R -c "fromjson?" >> $OUTPUT_DIR/$name.pfw
-      echo "]" >> $OUTPUT_DIR/$name.pfw
-      # compress
-      if [ $compressed == 1 ]; then
-        gzip $OUTPUT_DIR/$name.pfw
-        echo "Processed $OUTPUT_DIR/$name.pfw.gz"
-      else
-        echo "Processed $OUTPUT_DIR/$name.pfw"
-      fi
+  filename=$(basename -- "$file")
+  ext="${filename##*.}"
+  log "Processing file: $filename with extension: $ext"
+  cp "$LOG_DIR/$filename" "$OUTPUT_DIR/.tmp.$filename"
+  if [ "$ext" == "gz" ]; then
+    name=${filename%.pfw.gz}
+    log "Extracted name: $name"
+    echo "[" > "$OUTPUT_DIR/$name.pfw"
+    gunzip -c "$OUTPUT_DIR/.tmp.$filename" | LC_ALL=C sed 's/[^[:print:]\r\t]//g' | jq -R -c "fromjson?" >> "$OUTPUT_DIR/$name.pfw"
+    echo "]" >> "$OUTPUT_DIR/$name.pfw"
+    if [ $compressed == 1 ]; then
+    gzip "$OUTPUT_DIR/$name.pfw"
+    log "Compressed and processed: $OUTPUT_DIR/$name.pfw.gz"
     else
-      # if file is pfw get the name
-      name=${filename%.pfw}
-      echo "extracted name $name"
-      # replace non utf characters and valid json lines
-      echo "[" > $OUTPUT_DIR/$name.pfw
-      LC_ALL=C sed 's/[^[:print:]\r\t]//g' $OUTPUT_DIR/.tmp.$filename | jq -R -c "fromjson?" >> $OUTPUT_DIR/$name.pfw
-      echo "]" >> $OUTPUT_DIR/$name.pfw
-      if [ $compressed == 1 ]; then
-        gzip $OUTPUT_DIR/$name.pfw
-        echo "Processed $OUTPUT_DIR/$name.pfw.gz"
-      else
-        echo "Processed $OUTPUT_DIR/$name.pfw"
-      fi
-    fi    
-    # remove temp file
-    rm $OUTPUT_DIR/.tmp.$filename
+    log "Processed: $OUTPUT_DIR/$name.pfw"
+    fi
+  else
+    name=${filename%.pfw}
+    log "Extracted name: $name"
+    echo "[" > "$OUTPUT_DIR/$name.pfw"
+    LC_ALL=C sed 's/[^[:print:]\r\t]//g' "$OUTPUT_DIR/.tmp.$filename" | jq -R -c "fromjson?" >> "$OUTPUT_DIR/$name.pfw"
+    echo "]" >> "$OUTPUT_DIR/$name.pfw"
+    if [ $compressed == 1 ]; then
+    gzip "$OUTPUT_DIR/$name.pfw"
+    log "Compressed and processed: $OUTPUT_DIR/$name.pfw.gz"
+    else
+    log "Processed: $OUTPUT_DIR/$name.pfw"
+    fi
+  fi    
+  rm "$OUTPUT_DIR/.tmp.$filename"
+  log "Temporary file removed: $OUTPUT_DIR/.tmp.$filename"
   fi
 done
+
+log "Script execution completed."

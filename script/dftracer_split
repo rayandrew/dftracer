@@ -85,6 +85,10 @@ while getopts ':fvn:d:o:s:h' opt; do
       ;;
   esac
 done
+
+LOG_DIR=$(realpath "$LOG_DIR")
+dest=$(realpath "$dest")
+
 shift $((OPTIND - 1))
 
 pfw_total=0

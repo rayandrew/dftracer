@@ -5,7 +5,7 @@ requires = [
     "wheel",
     "ninja",
     "cmake>=3.12",
-    "zindex_py==0.0.4",
+    "zindex_py==0.0.5",
     "pybind11"
 ]
 build-backend = "setuptools.build_meta"
@@ -51,7 +51,7 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
   "pybind11", 
-  "zindex_py==0.0.4", 
+  "zindex_py==0.0.5", 
   "setuptools>=64", 
   "setuptools-scm>=8"
 ]

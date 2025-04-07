@@ -723,3 +723,8 @@ int brahma::POSIXDFTracer::fork() {
   DFT_LOGGER_END();
   return ret;
 }
+void brahma::POSIXDFTracer::exit(int status) {
+  BRAHMA_MAP_OR_FAIL(exit);
+  dft_finalize();
+  __real_exit(status);
+}

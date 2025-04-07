@@ -36,6 +36,7 @@ void dftracer::ChromeWriter::initialize(char *filename, bool throw_error,
       DFTRACER_LOG_INFO("created log file %s", filename);
     }
   }
+  init = true;
   DFTRACER_LOG_DEBUG("ChromeWriter.initialize %s", this->filename.c_str());
 }
 
@@ -73,74 +74,81 @@ void dftracer::ChromeWriter::log_metadata(int index, ConstEventNameType name,
 }
 
 void dftracer::ChromeWriter::finalize(bool has_entry) {
-  DFTRACER_LOG_DEBUG("ChromeWriter.finalize", "");
-  if (fh != nullptr) {
-    DFTRACER_LOG_INFO("Profiler finalizing writer %s", filename.c_str());
-    write_buffer_op(true);
-    fflush(fh);
-    int status = fclose(fh);
-    if (status != 0) {
-      DFTRACER_LOG_ERROR("unable to close log file %s for a+",
-                         filename.c_str());  // GCOVR_EXCL_LINE
-    }
-    if (!has_entry) {
-      DFTRACER_LOG_INFO("No trace data written deleting file %s",
-                        filename.c_str());
-      df_unlink(filename.c_str());
-    } else {
-      DFTRACER_LOG_INFO("Profiler writing the final symbol", "");
-      fh = fopen(this->filename.c_str(), "r+");
-      if (fh != nullptr) {
-        std::string data = "[\n";
-        auto written_elements =
-            fwrite(data.c_str(), sizeof(char), data.size(), fh);
-        if (written_elements != data.size()) {  // GCOVR_EXCL_START
-          DFTRACER_LOG_ERROR(
-              "unable to finalize log write %s for O_WRONLY written only %ld "
-              "of %ld",
-              filename.c_str(), data.size(), written_elements);
-        }  // GCOVR_EXCL_STOP
-        data = "]";
-        fseek(fh, 0, SEEK_END);
-        written_elements = fwrite(data.c_str(), sizeof(char), data.size(), fh);
-        if (written_elements != data.size()) {  // GCOVR_EXCL_START
-          DFTRACER_LOG_ERROR(
-              "unable to finalize log write %s for O_WRONLY written only %ld "
-              "of %ld",
-              filename.c_str(), data.size(), written_elements);
-        }  // GCOVR_EXCL_STOP
-        status = fclose(fh);
-        if (status != 0) {
-          DFTRACER_LOG_ERROR("unable to close log file %s for O_WRONLY",
-                             filename.c_str());  // GCOVR_EXCL_LINE
-        }
+  if (this->init) {
+    DFTRACER_LOG_DEBUG("ChromeWriter.finalize", "");
+    if (fh != nullptr) {
+      DFTRACER_LOG_INFO("Profiler finalizing writer %s", filename.c_str());
+      write_buffer_op(true);
+      fflush(fh);
+      int status = fclose(fh);
+      if (status != 0) {
+        DFTRACER_LOG_ERROR("unable to close log file %s for a+",
+                           filename.c_str());  // GCOVR_EXCL_LINE
       }
-      if (enable_compression) {
-        if (system("which gzip > /dev/null 2>&1")) {
-          DFTRACER_LOG_ERROR("Gzip compression does not exists",
-                             "");  // GCOVR_EXCL_LINE
-        } else {
-          DFTRACER_LOG_INFO("Applying Gzip compression on file %s",
-                            filename.c_str());
-          char cmd[2048];
-          sprintf(cmd, "gzip -f %s", filename.c_str());
-          int ret = system(cmd);
-          if (ret == 0) {
-            DFTRACER_LOG_INFO("Successfully compressed file %s.gz",
-                              filename.c_str());
+      if (!has_entry) {
+        DFTRACER_LOG_INFO("No trace data written deleting file %s",
+                          filename.c_str());
+        df_unlink(filename.c_str());
+      } else {
+        DFTRACER_LOG_INFO("Profiler writing the final symbol", "");
+        fh = fopen(this->filename.c_str(), "r+");
+        if (fh != nullptr) {
+          std::string data = "[\n";
+          auto written_elements =
+              fwrite(data.c_str(), sizeof(char), data.size(), fh);
+          if (written_elements != data.size()) {  // GCOVR_EXCL_START
+            DFTRACER_LOG_ERROR(
+                "unable to finalize log write %s for O_WRONLY written only %ld "
+                "of %ld",
+                filename.c_str(), data.size(), written_elements);
+          }  // GCOVR_EXCL_STOP
+          data = "]";
+          fseek(fh, 0, SEEK_END);
+          written_elements =
+              fwrite(data.c_str(), sizeof(char), data.size(), fh);
+          if (written_elements != data.size()) {  // GCOVR_EXCL_START
+            DFTRACER_LOG_ERROR(
+                "unable to finalize log write %s for O_WRONLY written only %ld "
+                "of %ld",
+                filename.c_str(), data.size(), written_elements);
+          }  // GCOVR_EXCL_STOP
+          status = fclose(fh);
+          if (status != 0) {
+            DFTRACER_LOG_ERROR("unable to close log file %s for O_WRONLY",
+                               filename.c_str());  // GCOVR_EXCL_LINE
+          }
+          fh = nullptr;
+        }
+        if (enable_compression) {
+          if (system("which gzip > /dev/null 2>&1")) {
+            DFTRACER_LOG_ERROR("Gzip compression does not exists",
+                               "");  // GCOVR_EXCL_LINE
           } else {
-            DFTRACER_LOG_ERROR("Unable to compress file %s", filename.c_str());
+            DFTRACER_LOG_INFO("Applying Gzip compression on file %s",
+                              filename.c_str());
+            char cmd[2048];
+            sprintf(cmd, "gzip -f %s", filename.c_str());
+            int ret = system(cmd);
+            if (ret == 0) {
+              DFTRACER_LOG_INFO("Successfully compressed file %s.gz",
+                                filename.c_str());
+            } else {
+              DFTRACER_LOG_ERROR("Unable to compress file %s",
+                                 filename.c_str());
+            }
           }
         }
       }
     }
-  }
-  if (enable_core_affinity) {
+    if (enable_core_affinity) {
 #if DISABLE_HWLOC == 1
-    hwloc_topology_destroy(topology);
+      hwloc_topology_destroy(topology);
 #endif
+    }
+    DFTRACER_LOG_DEBUG("Finished writer finalization", "");
+  } else {
+    DFTRACER_LOG_DEBUG("Already finalized writer", "");
   }
-  DFTRACER_LOG_DEBUG("Finished writer finalization", "");
 }
 
 void dftracer::ChromeWriter::convert_json(

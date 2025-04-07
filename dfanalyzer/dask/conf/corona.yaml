@@ -14,7 +14,7 @@ job:
   queue: pdebug
 scheduler:
   cmd: flux alloc -N ${DFTRACER_JOB_NUM_NODES} -t ${DFTRACER_JOB_WALL_TIME_MIN} -q ${DFTRACER_JOB_QUEUE}
-  port: 10005
+  port: 10003
   kill: flux cancel --all
 worker:
   ppn: 48

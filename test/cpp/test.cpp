@@ -99,6 +99,7 @@ int main(int argc, char *argv[]) {
   remove(filename_link);
   remove("demofile_link2.txt");
   if (init == 1) {
+    printf("Calling Finalize");
     DFTRACER_CPP_FINI();
   }
   return 0;

@@ -5,7 +5,9 @@ set -x  # Print each command before executing it
 
 echo "Running post.sh on $(hostname)"
 
-export DFTRACER_VERSION=$(python -c "import dftracer; print(dftracer.__version__)") || { echo "Failed to get DFTRACER_VERSION"; exit 1; }
+if [ "x$DFTRACER_VERSION" == "x" ]; then
+    export DFTRACER_VERSION=$(python -c "import dftracer; print(dftracer.__version__)") || { echo "Failed to get DFTRACER_VERSION"; exit 1; }
+fi
 
 pushd $LOG_STORE_DIR || { echo "Failed to change directory to $LOG_STORE_DIR"; exit 1; }
 

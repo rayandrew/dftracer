@@ -207,6 +207,8 @@ class POSIXDFTracer : public POSIX {
               char *const envp[]) override;
 
   int fork() override;
+
+  void exit(int status) override;
 };
 
 }  // namespace brahma

@@ -16,118 +16,135 @@ override=0
 folder=$PWD
 compressed=0
 dest="combined.pfw"
-gzip=0
+
+function log {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
 
 function usage {
-    echo "usage: $(basename $0) [-fcvg] [-d input_directory] [-o OUTPUT_FILE]"
-    echo "  -f                      override output file"
-    echo "  -c                      compress output file"
-    echo "  -v                      enable verbose mode"
-    echo "  -g                      process gzip files only"
-    echo "  -h                      display help"
-    echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
-    echo "  -o output_file          specify output file. should have extension .pfw"
-    exit 1
+  echo "usage: $(basename "$0") [-fcvg] [-d input_directory] [-o OUTPUT_FILE]"
+  echo "  -f                      override output file"
+  echo "  -c                      compress output file"
+  echo "  -v                      enable verbose mode"
+  echo "  -g                      process gzip files only"
+  echo "  -h                      display help"
+  echo "  -d input_directory      specify input directories. should contain .pfw or .pfw.gz files."
+  echo "  -o output_file          specify output file. should have extension .pfw"
+  exit 1
 }
+
+log "Starting script execution"
+
 while getopts ':cvfgd:o:h' opt; do
   case "$opt" in
-    d)
-      folder="${OPTARG}"
-      ;;
+  d)
+    folder="${OPTARG}"
+    log "Input directory set to $folder"
+    ;;
 
-    o)
-      dest="${OPTARG}"
-      if [[ $dest != *.pfw ]]; then
-        echo "output_file should have .pfw extension".
-      fi
-      ;;
-    g)
-      gz=1
-      ;;
-    f)
-      override=1
-      ;;
-    v)
-      set -x
-      ;;
-    c)
-      compressed=1
-      ;;
-    h)
-      usage
-      exit 0
-      ;;
+  o)
+    dest="${OPTARG}"
+    log "Output file set to $dest"
+    if [[ $dest != *.pfw ]]; then
+    echo "output_file should have .pfw extension".
+    fi
+    ;;
+  g)
+    gz=1
+    log "Processing gzip files only"
+    ;;
+  f)
+    override=1
+    log "Override mode enabled"
+    ;;
+  v)
+    set -x
+    log "Verbose mode enabled"
+    ;;
+  c)
+    compressed=1
+    log "Compression enabled for output file"
+    ;;
+  h)
+    usage
+    ;;
 
-    :)
-      echo -e "option requires an argument.\n"
-      usage
-      exit 1
-      ;;
+  :)
+    echo -e "option requires an argument.\n"
+    usage
+    ;;
 
-    ?)
-      echo -e "Invalid command option.\n"
-      usage
-      exit 1
-      ;;
+  ?)
+    echo -e "Invalid command option.\n"
+    usage
+    ;;
   esac
 done
+
+LOG_DIR=$(realpath "$LOG_DIR")
+dest=$(realpath "$dest")
+
 shift "$(($OPTIND -1))"
 
 if [[ "$override" == "1" ]]; then
-rm -rf $dest ${dest}.gz
+  log "Removing existing output files"
+  rm -rf "$dest" "${dest}".gz
 fi
 
 gz_count=0
 pfw_count=0
 if [[ "$gz" == "1" ]]; then
-  gz_count=`ls -1 $folder/*.gz 2> /dev/null | wc -l`
+  log "Counting .gz files in $folder"
+  gz_count=$(find "$folder" -maxdepth 1 -name "*.gz" 2> /dev/null | wc -l)
   total=$((pfw_count + gz_count))
   if [ $total == 0 ]; then
-      echo "The folder does not contain any pfw or pfw.gz files."
-      exit 0
+    log "No .pfw or .pfw.gz files found in $folder"
+    exit 0
   fi
 else
-  pfw_count=`ls -1 $folder/*.pfw 2> /dev/null | wc -l`
+  log "Counting .pfw files in $folder"
+  pfw_count=$(find "$folder" -maxdepth 1 -name "*.pfw" 2> /dev/null | wc -l)
 fi
 
 if [[ "$compressed" == "1" ]]; then
   if [ -f "$dest.gz" ] && [ "$override" -eq "0" ]; then
-      echo "The destination file exists. Please delete the file."
-      exit 0
+    log "Destination file $dest.gz exists and override is disabled"
+    exit 0
   fi
 else
-  if [ -f $dest ] && [ "$override" -eq "0" ]; then
-      echo "The destination file exists. Please delete the file."
-      exit 0
+  if [ -f "$dest" ] && [ "$override" -eq "0" ]; then
+    log "Destination file $dest exists and override is disabled"
+    exit 0
   fi
 fi
 
 d2=${dest}.bak
 shopt -s dotglob
 if [[ "$pfw_count" != "0" ]]; then
-  echo "Parsing pfw files from ${folder} folder"
-  cat `echo $folder/*.pfw` >> $d2
+  log "Parsing .pfw files from $folder"
+  cat "$folder"/*.pfw >> "$d2"
 fi
 
 if [[ "$gz_count" != "0" ]]; then
-  echo "Parsing pfw.gz files from ${folder} folder"
-  gzip -c -d `echo $folder/*.gz` >> $d2
+  log "Parsing .pfw.gz files from $folder"
+  gzip -c -d "$(echo "$folder"/*.gz)" >> "$d2"
 fi
 
-echo "Extracting events"
-
-sed -i 's/^\[//g;/^$/d;s/^ *//;s/ *$//;s/^\]\[//;s/^\]//' $d2
+log "Extracting events"
+sed -i 's/^\[//g;/^$/d;s/^ *//;s/ *$//;s/^\]\[//;s/^\]//' "$d2"
 tmp_file=$(mktemp)
-echo "[" | cat - $d2 > $tmp_file
-echo "]" >> $tmp_file
-mv $tmp_file $dest
-rm -rf $tmp_file
+echo "[" | cat - "$d2" > "$tmp_file"
+echo "]" >> "$tmp_file"
+mv "$tmp_file" "$dest"
+rm -rf "$tmp_file"
 
 if [ "$compressed" == "1" ]; then
-  echo "Compressing events"
-  gzip $dest
-  echo "Created output file ${dest}.gz"
+  log "Compressing output file"
+  gzip "$dest"
+  log "Created compressed output file ${dest}.gz"
 else
-  echo "Created output file ${dest}"
+  log "Created output file $dest"
 fi
-rm $d2
+rm "$d2"
+
+log "Script execution completed"
